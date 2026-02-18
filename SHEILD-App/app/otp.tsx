@@ -1,92 +1,89 @@
-import { View, Text, TextInput, TouchableOpacity, StyleSheet } from "react-native";
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  Alert,
+  ActivityIndicator,
+} from "react-native";
 import { useState } from "react";
-import { useRouter } from "expo-router";
-import { useLocalSearchParams } from "expo-router";
-const [loading, setLoading] = useState(false);
-import { Alert } from "react-native";
-import { ActivityIndicator } from "react-native";
+import { useRouter, useLocalSearchParams } from "expo-router";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 
 export default function OtpScreen() {
   const router = useRouter();
+  const { phone } = useLocalSearchParams();
+
   const [otp, setOtp] = useState("");
-    const { phone } = useLocalSearchParams();
-    console.log(phone);
-    const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-const handleVerify = async () => {
-  console.log("Verify clicked");
-  console.log("OTP:", otp);
+  const handleVerify = async () => {
+  if (!phone) {
+    Alert.alert("Error", "Phone number missing.");
+    return;
+  }
 
-  if (!otp || otp.trim().length !== 6) {
-    Alert.alert("Invalid OTP", "Please enter a valid 6-digit OTP.");
+  if (!otp || otp.length !== 6) {
+    Alert.alert("Invalid OTP", "Enter a valid 6-digit OTP");
     return;
   }
 
   try {
     setLoading(true);
 
+    // 🔹 Ensure phone is always string
+    const phoneString =
+      Array.isArray(phone) ? phone[0] : phone;
+
     const response = await fetch(
-      "http://10.0.2.2:5000/verify-otp",
+      "http://172.16.67.194:5000/verify-otp",
       {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ phone, otp }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          phone: phoneString,
+          otp,
+        }),
       }
     );
 
-    console.log("Response status:", response.status);
+    const data = await response.json();
 
-    // Always parse safely
-    const text = await response.text();
-    let data;
+    if (response.ok && data.success) {
 
-    try {
-      data = JSON.parse(text);
-    } catch (e) {
-      throw new Error("Invalid JSON response from server");
+      // ✅ Mark user logged in
+      await AsyncStorage.setItem("isLoggedIn", "true");
+
+      // ✅ Save phone locally
+      await AsyncStorage.setItem("userPhone", phoneString);
+
+      // 🔥 Route based on user type
+      if (data.existingUser) {
+        router.replace("/dashboard");
+      } else {
+        router.replace("/profile-setup");
+      }
+
+    } else {
+      Alert.alert("Error ❌", data.message || "Invalid OTP");
     }
 
-    console.log("Server data:", data);
-
-    if (response.ok && data?.success === true) {
-  console.log("OTP verified successfully");
-
-  // STOP LOADING FIRST
-  setLoading(false);
-
-  // Small delay ensures render cycle completes
-  setTimeout(() => {
-    Alert.alert("Success ✅", "OTP verified successfully!");
-
-    setTimeout(() => {
-      router.replace("/dashboard");
-    }, 800);
-
-  }, 100);
-
-} else {
-  setLoading(false);
-  Alert.alert("Error ❌", "Invalid OTP. Please try again.");
-}
-
-
   } catch (error) {
-    console.log("Fetch error:", error);
+    console.log("OTP Verify Error:", error);
+    Alert.alert("Server Error", "Unable to connect to server");
+  } finally {
     setLoading(false);
-    Alert.alert("Server Error", "Unable to connect to server.");
   }
 };
-
 
 
   return (
     <View style={styles.container}>
       <Text style={styles.title}>OTP Verification</Text>
       <Text style={styles.subtitle}>
-        Enter the 6-digit code sent to your phone
+        Enter the 6-digit code sent to {phone}
       </Text>
 
       <TextInput
@@ -100,21 +97,15 @@ const handleVerify = async () => {
       />
 
       <TouchableOpacity
-  style={styles.button}
-  onPress={handleVerify}
-  disabled={loading}
->
-  {loading ? (
-    <ActivityIndicator color="#fff" />
-  ) : (
-    <Text style={styles.buttonText}>Verify</Text>
-  )}
-</TouchableOpacity>
-
-
-
-      <TouchableOpacity onPress={() => router.back()}>
-        <Text style={styles.back}>Back</Text>
+        style={styles.button}
+        onPress={handleVerify}
+        disabled={loading}
+      >
+        {loading ? (
+          <ActivityIndicator color="#fff" />
+        ) : (
+          <Text style={styles.buttonText}>Verify</Text>
+        )}
       </TouchableOpacity>
     </View>
   );
@@ -157,10 +148,5 @@ const styles = StyleSheet.create({
   buttonText: {
     color: "#fff",
     fontWeight: "bold",
-  },
-  back: {
-    color: "#aaa",
-    textAlign: "center",
-    marginTop: 20,
   },
 });

@@ -4,92 +4,183 @@ import {
   StyleSheet,
   TouchableOpacity,
   ScrollView,
+  Alert,
 } from "react-native";
 import { MaterialIcons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useEffect } from "react";
 
 export default function Dashboard() {
-  return (
-    <View style={styles.container}>
-      <ScrollView contentContainerStyle={{ paddingBottom: 120 }}>
-        
-        {/* Top App Bar */}
-        <View style={styles.header}>
-          <MaterialIcons name="favorite" size={28} color="#ec1313" />
-          <Text style={styles.headerTitle}>SHIELD</Text>
-          <TouchableOpacity style={styles.profileButton}>
-            <MaterialIcons name="account-circle" size={24} color="#fff" />
-          </TouchableOpacity>
-        </View>
+  const router = useRouter();
 
-        {/* Status Header */}
-        <View style={styles.statusSection}>
-          <Text style={styles.statusTitle}>Safety Service Active</Text>
-          <View style={styles.statusRow}>
-            <View style={styles.greenDot} />
-            <Text style={styles.statusSub}>
-              System monitoring for your safety
-            </Text>
-          </View>
-        </View>
+  // 🔐 Protect Dashboard (redirect if not logged in)
+  useEffect(() => {
+    const checkLogin = async () => {
+      const isLoggedIn = await AsyncStorage.getItem("isLoggedIn");
+      if (isLoggedIn !== "true") {
+        router.replace("/phone");
+      }
+    };
 
-        {/* SOS Button Section */}
-        <View style={styles.sosContainer}>
-          <View style={styles.sosOuter} />
-          <View style={styles.sosMiddle} />
+    checkLogin();
+  }, []);
 
-          <TouchableOpacity style={styles.sosButton}>
-            <MaterialIcons name="back-hand" size={40} color="#fff" />
-            <Text style={styles.sosText}>HOLD TO TRIGGER</Text>
-            <Text style={styles.sosSub}>EMERGENCY SOS</Text>
-          </TouchableOpacity>
-        </View>
+  // 🚪 Logout with confirmation
+  const handleLogout = () => {
+  Alert.alert(
+    "Logout",
+    "Are you sure you want to logout?",
+    [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Logout",
+        onPress: async () => {
+          await AsyncStorage.clear(); // 🔥 clear everything
 
-        {/* Status Cards */}
-        <View style={styles.cardRow}>
-          <StatusCard icon="mic" label="Mic" value="Active" />
-          <StatusCard icon="location-on" label="Location" value="Shared" />
-          <StatusCard icon="sensors" label="Sensors" value="Locked" />
-        </View>
+          Alert.alert("Success", "Logged out successfully!");
 
-        {/* AI Banner */}
-        <View style={styles.aiBanner}>
-          <View style={styles.aiIcon}>
-            <MaterialIcons name="smart-toy" size={22} color="#ec1313" />
-          </View>
-          <View>
-            <Text style={styles.aiTitle}>AI Guardian is analyzing</Text>
-            <Text style={styles.aiSub}>
-              Silent mode enabled. No threats detected.
-            </Text>
-          </View>
-        </View>
-
-        {/* Activity Log */}
-        <View style={styles.activitySection}>
-          <Text style={styles.activityTitle}>RECENT ACTIVITY</Text>
-
-          <ActivityItem
-            icon="history"
-            text="Home arrival recorded"
-            time="2h ago"
-          />
-          <ActivityItem
-            icon="route"
-            text={`Trusted contact alerted: "I'm heading home"`}
-            time="3h ago"
-          />
-        </View>
-      </ScrollView>
-
-      {/* Bottom Navigation */}
-      <View style={styles.navBar}>
-        <NavItem icon="home" label="Home" active />
-        <NavItem icon="map" label="SafeMap" />
-        <NavItem icon="group" label="Circles" />
-        <NavItem icon="settings" label="Settings" />
-      </View>
-    </View>
+          router.replace("/otp"); // 🔥 go directly to login
+        },
+      },
+    ]
   );
+};
+
+
+
+  return (
+  <View style={styles.container}>
+
+    {/* 🔥 HEADER OUTSIDE SCROLLVIEW */}
+    <View
+  style={{
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingVertical: 15,
+    backgroundColor: "#181111",
+  }}
+>
+  <MaterialIcons name="favorite" size={28} color="#ec1313" />
+
+  <Text
+    style={{
+      color: "#fff",
+      fontSize: 20,
+      fontWeight: "bold",
+    }}
+  >
+    SHIELD
+  </Text>
+
+  <TouchableOpacity
+    onPress={handleLogout}
+    style={{
+      padding: 10,
+      borderRadius: 50,
+      backgroundColor: "#2a1b1b",
+      alignItems: "center",
+      justifyContent: "center",
+    }}
+  >
+    <MaterialIcons name="logout" size={26} color="#ec1313" />
+  </TouchableOpacity>
+</View>
+
+    {/* 🔥 SCROLLABLE CONTENT */}
+    <ScrollView contentContainerStyle={{ paddingBottom: 120 }}>
+
+      {/* Status Header */}
+      <View style={styles.statusSection}>
+        <Text style={styles.statusTitle}>Safety Service Active</Text>
+        <View style={styles.statusRow}>
+          <View style={styles.greenDot} />
+          <Text style={styles.statusSub}>
+            System monitoring for your safety
+          </Text>
+        </View>
+      </View>
+
+      {/* SOS Button Section */}
+      <View style={styles.sosContainer}>
+        <View style={styles.sosOuter} />
+        <View style={styles.sosMiddle} />
+
+        <TouchableOpacity style={styles.sosButton}>
+          <MaterialIcons name="back-hand" size={40} color="#fff" />
+          <Text style={styles.sosText}>HOLD TO TRIGGER</Text>
+          <Text style={styles.sosSub}>EMERGENCY SOS</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Status Cards */}
+      <View style={styles.cardRow}>
+        <StatusCard icon="mic" label="Mic" value="Active" />
+        <StatusCard icon="location-on" label="Location" value="Shared" />
+        <StatusCard icon="sensors" label="Sensors" value="Locked" />
+      </View>
+
+      {/* AI Banner */}
+      <View style={styles.aiBanner}>
+        <View style={styles.aiIcon}>
+          <MaterialIcons name="smart-toy" size={22} color="#ec1313" />
+        </View>
+        <View>
+          <Text style={styles.aiTitle}>AI Guardian is analyzing</Text>
+          <Text style={styles.aiSub}>
+            Silent mode enabled. No threats detected.
+          </Text>
+        </View>
+      </View>
+
+      {/* Activity Log */}
+      <View style={styles.activitySection}>
+        <Text style={styles.activityTitle}>RECENT ACTIVITY</Text>
+
+        <ActivityItem
+          icon="history"
+          text="Home arrival recorded"
+          time="2h ago"
+        />
+        <ActivityItem
+          icon="route"
+          text={`Trusted contact alerted: "I'm heading home"`}
+          time="3h ago"
+        />
+      </View>
+
+    </ScrollView>
+
+    {/* Bottom Navigation */}
+    <View style={styles.navBar}>
+      <NavItem
+        icon="home"
+        label="Home"
+        active
+        onPress={() => router.replace("/dashboard")}
+      />
+      <NavItem
+        icon="group"
+        label="Contacts"
+        onPress={() => router.push("/contacts")}
+      />
+      <NavItem
+        icon="map"
+        label="SafeMap"
+        onPress={() => router.push("/safemap")}
+      />
+      <NavItem
+        icon="person"
+        label="Profile"
+        onPress={() => router.push("/profile")}
+      />
+    </View>
+
+  </View>
+);
+
 }
 
 /* ---------------- COMPONENTS ---------------- */
@@ -112,8 +203,8 @@ const ActivityItem = ({ icon, text, time }: any) => (
   </View>
 );
 
-const NavItem = ({ icon, label, active }: any) => (
-  <TouchableOpacity style={styles.navItem}>
+const NavItem = ({ icon, label, active, onPress }: any) => (
+  <TouchableOpacity style={styles.navItem} onPress={onPress}>
     <MaterialIcons
       name={icon}
       size={24}
@@ -136,20 +227,27 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#181111",
+    paddingTop: 30,
   },
 
   header: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    padding: 20,
-  },
+  flexDirection: "row",
+  justifyContent: "space-between",
+  alignItems: "center",
+  paddingHorizontal: 20,
+  paddingTop: 15,
+  paddingBottom: 10,
+  backgroundColor: "#181111",
+  zIndex: 10,   // important
+},
+
 
   headerTitle: {
-    color: "#fff",
-    fontSize: 18,
-    fontWeight: "bold",
-  },
+  color: "#fff",
+  fontSize: 20,
+  fontWeight: "bold",
+},
+
 
   profileButton: {
     backgroundColor: "#2a1b1b",
@@ -172,7 +270,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     marginTop: 5,
-    gap: 6,
   },
 
   greenDot: {
@@ -180,6 +277,7 @@ const styles = StyleSheet.create({
     height: 8,
     backgroundColor: "green",
     borderRadius: 4,
+    marginRight: 6,
   },
 
   statusSub: {
@@ -216,9 +314,6 @@ const styles = StyleSheet.create({
     backgroundColor: "#ec1313",
     alignItems: "center",
     justifyContent: "center",
-    shadowColor: "#ec1313",
-    shadowOpacity: 0.5,
-    shadowRadius: 20,
     elevation: 10,
   },
 
@@ -270,13 +365,13 @@ const styles = StyleSheet.create({
     margin: 20,
     padding: 15,
     borderRadius: 15,
-    gap: 12,
   },
 
   aiIcon: {
     backgroundColor: "rgba(236,19,19,0.2)",
     padding: 8,
     borderRadius: 10,
+    marginRight: 10,
   },
 
   aiTitle: {
