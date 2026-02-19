@@ -38,7 +38,7 @@ export default function OtpScreen() {
       Array.isArray(phone) ? phone[0] : phone;
 
     const response = await fetch(
-      "http://172.16.67.194:5000/verify-otp",
+      "http://10.200.110.103:5000/verify-otp",
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },

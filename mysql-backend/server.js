@@ -172,28 +172,23 @@ app.post("/register-user", (req, res) => {
    🔹 GET USER BY PHONE
 ================================ */
 
+// 🔹 Get user by phone
 app.get("/user/:phone", (req, res) => {
   const { phone } = req.params;
 
-  db.query(
-    "SELECT * FROM users WHERE phone = ?",
-    [phone],
-    (err, results) => {
-      if (err) {
-        return res.status(500).json({ success: false });
-      }
+  const sql = "SELECT * FROM users WHERE phone = ?";
 
-      if (results.length > 0) {
-        res.json(results[0]);
-      } else {
-        res.status(404).json({
-          success: false,
-          message: "User not found",
-        });
-      }
+  db.query(sql, [phone], (err, results) => {
+    if (err) return res.status(500).json({ message: "Database error" });
+
+    if (results.length > 0) {
+      res.json(results[0]);
+    } else {
+      res.status(404).json({ message: "User not found" });
     }
-  );
+  });
 });
+
 
 /* ================================
    🔹 UPDATE USER
@@ -201,25 +196,25 @@ app.get("/user/:phone", (req, res) => {
 
 app.put("/update-user/:phone", (req, res) => {
   const { phone } = req.params;
-  const { age, bloodGroup, notes, aiEnabled } = req.body;
+  const { name, age, bloodGroup, notes, aiEnabled } = req.body;
 
   const sql = `
-    UPDATE users 
-    SET age = ?, blood_group = ?, notes = ?, ai_enabled = ?
+    UPDATE users
+    SET name = ?, age = ?, blood_group = ?, notes = ?, ai_enabled = ?
     WHERE phone = ?
   `;
 
-  db.query(sql, [age, bloodGroup, notes, aiEnabled, phone], (err) => {
-    if (err) {
-      return res.status(500).json({ success: false });
-    }
+  db.query(
+    sql,
+    [name, age, bloodGroup, notes, aiEnabled, phone],
+    (err) => {
+      if (err) return res.status(500).json({ message: "Database error" });
 
-    res.json({
-      success: true,
-      message: "Profile updated successfully",
-    });
-  });
+      res.json({ success: true });
+    }
+  );
 });
+
 
 /* ================================
    🔹 START SERVER

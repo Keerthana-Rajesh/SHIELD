@@ -46,7 +46,7 @@ export default function PhoneScreen() {
     setLoading(true);
 
     const response = await fetch(
-      "http://172.16.67.194:5000/send-otp",
+      "http://10.200.110.103:5000/send-otp",
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },

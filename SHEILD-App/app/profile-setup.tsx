@@ -51,7 +51,7 @@ export default function ProfileSetup() {
     }
 
     const response = await fetch(
-      "http://172.16.67.194:5000/register-user",
+      "http://10.200.110.103:5000/register-user",
       {
         method: "POST",
         headers: {

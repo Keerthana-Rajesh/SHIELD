@@ -40,7 +40,7 @@ export default function Dashboard() {
 
           Alert.alert("Success", "Logged out successfully!");
 
-          router.replace("/otp"); // 🔥 go directly to login
+          router.replace("/phone"); // 🔥 go directly to login
         },
       },
     ]
