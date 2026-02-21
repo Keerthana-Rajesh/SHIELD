@@ -135,21 +135,18 @@ export default function Dashboard() {
         </View>
       </View>
 
-      {/* Activity Log */}
-      <View style={styles.activitySection}>
-        <Text style={styles.activityTitle}>RECENT ACTIVITY</Text>
+      <View style={styles.featureGrid}>
 
-        <ActivityItem
-          icon="history"
-          text="Home arrival recorded"
-          time="2h ago"
-        />
-        <ActivityItem
-          icon="route"
-          text={`Trusted contact alerted: "I'm heading home"`}
-          time="3h ago"
-        />
-      </View>
+  <FeatureButton icon="group" label="Emergency Contacts" route="/contacts" />
+  <FeatureButton icon="timer" label="Safety Timer" route="/timer" />
+  <FeatureButton icon="location-on" label="Share Location" route="/location" />
+  <FeatureButton icon="phone-in-talk" label="Fake Call" route="/fakecall" />
+  <FeatureButton icon="call" label="Helpline Numbers" route="/helpline" />
+  <FeatureButton icon="verified-user" label="Trusted Circles" route="/circles" />
+  <FeatureButton icon="report" label="Report Incident" route="/report" />
+  <FeatureButton icon="smart-toy" label="AI Guardian" route="/ai" />
+
+</View>
 
     </ScrollView>
 
@@ -220,6 +217,20 @@ const NavItem = ({ icon, label, active, onPress }: any) => (
     </Text>
   </TouchableOpacity>
 );
+const FeatureButton = ({ icon, label, route }: any) => {
+  const router = useRouter();
+
+  return (
+    <TouchableOpacity
+      style={styles.featureCard}
+      activeOpacity={0.8}
+      onPress={() => router.push(route)}
+    >
+      <MaterialIcons name={icon} size={28} color="#ec1313" />
+      <Text style={styles.featureLabel}>{label}</Text>
+    </TouchableOpacity>
+  );
+};
 
 /* ---------------- STYLES ---------------- */
 
@@ -437,4 +448,29 @@ const styles = StyleSheet.create({
     fontSize: 10,
     marginTop: 2,
   },
+  featureGrid: {
+  flexDirection: "row",
+  flexWrap: "wrap",
+  justifyContent: "space-between",
+  paddingHorizontal: 20,
+  marginTop: 10,
+},
+
+featureCard: {
+  width: "47%",
+  backgroundColor: "#2a1b1b",
+  paddingVertical: 25,
+  borderRadius: 20,
+  alignItems: "center",
+  justifyContent: "center",
+  marginBottom: 15,
+  elevation: 5,
+},
+
+featureLabel: {
+  marginTop: 8,
+  fontSize: 12,
+  color: "#ddd",
+  textAlign: "center",
+},
 });
