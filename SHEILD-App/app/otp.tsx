@@ -14,14 +14,14 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 
 export default function OtpScreen() {
   const router = useRouter();
-  const { phone } = useLocalSearchParams();
+  const { email } = useLocalSearchParams();
 
   const [otp, setOtp] = useState("");
   const [loading, setLoading] = useState(false);
 
   const handleVerify = async () => {
-  if (!phone) {
-    Alert.alert("Error", "Phone number missing.");
+  if (!email) {
+    Alert.alert("Error", "Email missing.");
     return;
   }
 
@@ -33,17 +33,16 @@ export default function OtpScreen() {
   try {
     setLoading(true);
 
-    // 🔹 Ensure phone is always string
-    const phoneString =
-      Array.isArray(phone) ? phone[0] : phone;
+    const emailString =
+      Array.isArray(email) ? email[0] : email;
 
     const response = await fetch(
-      "http://10.200.110.103:5000/verify-otp",
+      "http://10.200.110.103:5000/verify-email-otp",
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          phone: phoneString,
+          email: emailString,
           otp,
         }),
       }
@@ -52,24 +51,17 @@ export default function OtpScreen() {
     const data = await response.json();
 
     if (response.ok && data.success) {
-
-      // ✅ Mark user logged in
       await AsyncStorage.setItem("isLoggedIn", "true");
+      await AsyncStorage.setItem("userEmail", emailString);
 
-      // ✅ Save phone locally
-      await AsyncStorage.setItem("userPhone", phoneString);
-
-      // 🔥 Route based on user type
       if (data.existingUser) {
         router.replace("/dashboard");
       } else {
         router.replace("/profile-setup");
       }
-
     } else {
       Alert.alert("Error ❌", data.message || "Invalid OTP");
     }
-
   } catch (error) {
     console.log("OTP Verify Error:", error);
     Alert.alert("Server Error", "Unable to connect to server");
@@ -83,7 +75,7 @@ export default function OtpScreen() {
     <View style={styles.container}>
       <Text style={styles.title}>OTP Verification</Text>
       <Text style={styles.subtitle}>
-        Enter the 6-digit code sent to {phone}
+        Enter the 6-digit code sent to {email}
       </Text>
 
       <TextInput

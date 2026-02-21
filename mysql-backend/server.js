@@ -1,23 +1,24 @@
 const express = require("express");
 const mysql = require("mysql2");
 const cors = require("cors");
+const nodemailer = require("nodemailer");
 require("dotenv").config();
 
 const app = express();
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
 
 app.use(cors());
 app.use(express.json());
 
 /* ================================
-   🔹 MySQL Connection (Pool)
+   🔹 MySQL Connection Pool
 ================================ */
 
 const db = mysql.createPool({
-  host: "localhost",
-  user: "root",
-  password: "Lumos@Root2345", // change if needed
-  database: "sheild_db",
+  host: process.env.DB_HOST,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME,
   connectionLimit: 10,
 });
 
@@ -31,50 +32,79 @@ db.getConnection((err, connection) => {
 });
 
 /* ================================
-   🔹 SEND OTP
+   🔹 EMAIL TRANSPORTER
 ================================ */
 
-app.post("/send-otp", (req, res) => {
-  const { phone } = req.body;
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
+});
 
-  if (!phone) {
+/* ================================
+   🔹 SEND EMAIL OTP
+================================ */
+
+app.post("/send-email-otp", (req, res) => {
+  const { email } = req.body;
+
+  if (!email) {
     return res.status(400).json({
       success: false,
-      message: "Phone number required",
+      message: "Email required",
     });
   }
 
   const otp = Math.floor(100000 + Math.random() * 900000);
 
-  const sql =
-    "INSERT INTO otp_verifications (phone, otp, created_at) VALUES (?, ?, NOW())";
+  const sql = `
+    INSERT INTO email_otps (email, otp)
+    VALUES (?, ?)
+  `;
 
-  db.query(sql, [phone, otp], (err) => {
+  db.query(sql, [email, otp], (err) => {
     if (err) {
       console.log(err);
       return res.status(500).json({
         success: false,
-        message: "Failed to store OTP",
+        message: "Database error",
       });
     }
 
-    console.log(`📱 OTP for ${phone} is ${otp}`);
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      to: email,
+      subject: "Your SHIELD OTP Code",
+      text: `Your OTP code is ${otp}. It expires in 5 minutes.`,
+    };
 
-    res.json({
-      success: true,
-      message: "OTP sent successfully",
+    transporter.sendMail(mailOptions, (error) => {
+      if (error) {
+        console.log(error);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to send email",
+        });
+      }
+
+      res.json({
+        success: true,
+        message: "OTP sent to email",
+      });
     });
   });
 });
 
 /* ================================
-   🔹 VERIFY OTP
+   🔹 VERIFY EMAIL OTP
 ================================ */
 
-app.post("/verify-otp", (req, res) => {
-  const { phone, otp } = req.body;
+app.post("/verify-email-otp", (req, res) => {
+  const { email, otp } = req.body;
 
-  if (!phone || !otp) {
+  if (!email || !otp) {
     return res.status(400).json({
       success: false,
       message: "Missing fields",
@@ -82,34 +112,28 @@ app.post("/verify-otp", (req, res) => {
   }
 
   const sql = `
-    SELECT * FROM otp_verifications 
-    WHERE phone = ? AND otp = ?
+    SELECT * FROM email_otps
+    WHERE email = ? AND otp = ?
     AND created_at >= NOW() - INTERVAL 5 MINUTE
-    ORDER BY created_at DESC 
+    ORDER BY created_at DESC
     LIMIT 1
   `;
 
-  db.query(sql, [phone, otp], (err, results) => {
-    if (err) {
-      console.log(err);
-      return res.status(500).json({ success: false });
-    }
+  db.query(sql, [email, otp], (err, results) => {
+    if (err) return res.status(500).json({ success: false });
 
     if (results.length === 0) {
       return res.status(400).json({
         success: false,
-        message: "Invalid OTP",
+        message: "Invalid or expired OTP",
       });
     }
 
-    // OTP valid → Check if user exists
     db.query(
-      "SELECT * FROM users WHERE phone = ?",
-      [phone],
+      "SELECT * FROM users WHERE email = ?",
+      [email],
       (err2, userResult) => {
-        if (err2) {
-          return res.status(500).json({ success: false });
-        }
+        if (err2) return res.status(500).json({ success: false });
 
         if (userResult.length > 0) {
           return res.json({
@@ -129,13 +153,12 @@ app.post("/verify-otp", (req, res) => {
 });
 
 /* ================================
-   🔹 REGISTER NEW USER
+   🔹 REGISTER USER
 ================================ */
-
 app.post("/register-user", (req, res) => {
-  const { name, age, bloodGroup, notes, password, aiEnabled, phone } = req.body;
+  const { name, age, bloodGroup, notes, password, aiEnabled, email } = req.body;
 
-  if (!name || !phone) {
+  if (!name || !email) {
     return res.status(400).json({
       success: false,
       message: "Missing required fields",
@@ -144,42 +167,32 @@ app.post("/register-user", (req, res) => {
 
   const sql = `
     INSERT INTO users 
-    (name, age, blood_group, notes, password, ai_enabled, phone)
+    (name, age, blood_group, notes, password, ai_enabled, email)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `;
 
   db.query(
     sql,
-    [name, age, bloodGroup, notes, password, aiEnabled, phone],
+    [name, age, bloodGroup, notes, password, aiEnabled, email],
     (err) => {
       if (err) {
-        console.log(err);
-        return res.status(500).json({
-          success: false,
-          message: "Database error",
-        });
+        return res.status(500).json({ success: false });
       }
 
-      res.json({
-        success: true,
-        message: "User registered successfully",
-      });
+      res.json({ success: true });
     }
   );
 });
-
 /* ================================
-   🔹 GET USER BY PHONE
+   🔹 GET USER (BY PHONE OR EMAIL)
 ================================ */
+app.get("/user/:email", (req, res) => {
+  const { email } = req.params;
 
-// 🔹 Get user by phone
-app.get("/user/:phone", (req, res) => {
-  const { phone } = req.params;
+  const sql = "SELECT * FROM users WHERE email = ?";
 
-  const sql = "SELECT * FROM users WHERE phone = ?";
-
-  db.query(sql, [phone], (err, results) => {
-    if (err) return res.status(500).json({ message: "Database error" });
+  db.query(sql, [email], (err, results) => {
+    if (err) return res.status(500).json({ success: false });
 
     if (results.length > 0) {
       res.json(results[0]);
@@ -188,34 +201,29 @@ app.get("/user/:phone", (req, res) => {
     }
   });
 });
-
-
 /* ================================
    🔹 UPDATE USER
 ================================ */
-
-app.put("/update-user/:phone", (req, res) => {
-  const { phone } = req.params;
+app.put("/update-user/:email", (req, res) => {
+  const { email } = req.params;
   const { name, age, bloodGroup, notes, aiEnabled } = req.body;
 
   const sql = `
     UPDATE users
     SET name = ?, age = ?, blood_group = ?, notes = ?, ai_enabled = ?
-    WHERE phone = ?
+    WHERE email = ?
   `;
 
   db.query(
     sql,
-    [name, age, bloodGroup, notes, aiEnabled, phone],
+    [name, age, bloodGroup, notes, aiEnabled, email],
     (err) => {
-      if (err) return res.status(500).json({ message: "Database error" });
+      if (err) return res.status(500).json({ success: false });
 
       res.json({ success: true });
     }
   );
 });
-
-
 /* ================================
    🔹 START SERVER
 ================================ */

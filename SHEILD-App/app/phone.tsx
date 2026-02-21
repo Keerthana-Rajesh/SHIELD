@@ -15,7 +15,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 
 export default function PhoneScreen() {
   const router = useRouter();
-  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
 
   /* ================================
@@ -34,45 +34,42 @@ export default function PhoneScreen() {
   }, []);
 
   /* ================================
-     ✅ Send OTP
+     ✅ Send Email OTP
   ================================= */
   const handleGetOtp = async () => {
-  if (!phone || phone.length !== 10) {
-    Alert.alert("Invalid Number", "Enter a valid 10-digit phone number");
-    return;
-  }
-
-  try {
-    setLoading(true);
-
-    const response = await fetch(
-      "http://10.200.110.103:5000/send-otp",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone }),
-      }
-    );
-
-    const data = await response.json();
-
-    if (response.ok && data.success) {
-      router.push(`/otp?phone=${phone}`);
-    } else {
-      Alert.alert("Error", data.message || "Failed to send OTP");
+    if (!email || !email.includes("@")) {
+      Alert.alert("Invalid Email", "Enter a valid email address");
+      return;
     }
 
-  } catch (error) {
-    Alert.alert("Server Error", "Unable to connect to server");
-  } finally {
-    setLoading(false);
-  }
-};
+    try {
+      setLoading(true);
 
+      const response = await fetch(
+        "http://10.200.110.103:5000/send-email-otp",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email }),
+        }
+      );
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        router.push(`/otp?email=${email}`);
+      } else {
+        Alert.alert("Error", data.message || "Failed to send OTP");
+      }
+    } catch (error) {
+      Alert.alert("Server Error", "Unable to connect to server");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <SafeAreaView style={styles.container}>
-      
       {/* Header */}
       <View style={styles.header}>
         <MaterialIcons name="shield" size={32} color="#ec1313" />
@@ -93,20 +90,20 @@ export default function PhoneScreen() {
       {/* Login Section */}
       <Text style={styles.loginTitle}>Login</Text>
       <Text style={styles.loginSub}>
-        Enter your phone number to receive a secure code.
+        Enter your email to receive a secure code.
       </Text>
 
-      {/* Phone Input */}
+      {/* Email Input (UI kept same) */}
       <View style={styles.inputWrapper}>
-        <Text style={styles.prefix}>+91</Text>
+        <MaterialIcons name="email" size={20} color="#aaa" />
         <TextInput
-          style={styles.input}
-          placeholder="Enter phone number"
+          style={[styles.input, { marginLeft: 10 }]}
+          placeholder="Enter email address"
           placeholderTextColor="#888"
-          keyboardType="number-pad"
-          maxLength={10}
-          value={phone}
-          onChangeText={setPhone}
+          keyboardType="email-address"
+          autoCapitalize="none"
+          value={email}
+          onChangeText={setEmail}
         />
       </View>
 
@@ -163,6 +160,9 @@ export default function PhoneScreen() {
     </SafeAreaView>
   );
 }
+
+/* 🎨 Styles remain SAME */
+
 
 /* ================================
    🎨 STYLES
