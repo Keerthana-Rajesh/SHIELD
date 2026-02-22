@@ -4,26 +4,55 @@ import {
   StyleSheet,
   TouchableOpacity,
   ScrollView,
-  Image,
 } from "react-native";
 import { MaterialIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
+import { useState } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useFocusEffect } from "@react-navigation/native";
+import { useCallback } from "react";
 
 export default function Contacts() {
-    const router = useRouter();
-    
+  const router = useRouter();
+  const [contacts, setContacts] = useState<any[]>([]);
+
+  // 🔥 Fetch contacts every time screen focuses
+  useFocusEffect(
+    useCallback(() => {
+      const loadContacts = async () => {
+        try {
+          const email = await AsyncStorage.getItem("userEmail");
+
+          if (!email) return;
+
+          const response = await fetch(
+            `http://10.200.110.103:5000/contacts/${email}`
+          );
+
+          const data = await response.json();
+
+          setContacts(data);
+        } catch (error) {
+          console.log("Error loading contacts:", error);
+        }
+      };
+
+      loadContacts();
+    }, [])
+  );
+
   return (
     <View style={styles.container}>
       <ScrollView contentContainerStyle={{ paddingBottom: 160 }}>
 
-        {/* Top App Bar */}
+        {/* HEADER */}
         <View style={styles.header}>
           <MaterialIcons name="arrow-back-ios" size={22} color="#fff" />
           <Text style={styles.headerTitle}>Trusted Contacts</Text>
           <MaterialIcons name="settings" size={24} color="#fff" />
         </View>
 
-        {/* Header Description */}
+        {/* DESCRIPTION */}
         <View style={styles.section}>
           <View style={styles.circleHeader}>
             <MaterialIcons name="shield" size={22} color="#ec1313" />
@@ -36,99 +65,97 @@ export default function Contacts() {
           </Text>
         </View>
 
-        {/* Contacts */}
-        <ContactCard
-          name="Sarah Johnson"
-          relation="Sister"
-          phone="+1 (555) 012-3456"
-        />
-
-        <ContactCard
-          name="Michael Chen"
-          relation="Partner"
-          phone="+1 (555) 987-6543"
-        />
-
-        {/* Emergency Services */}
-        <View style={styles.emergencyCard}>
-          <View style={styles.emergencyIcon}>
-            <MaterialIcons name="local-police" size={26} color="#fff" />
-          </View>
-
-          <View style={{ flex: 1 }}>
-            <Text style={styles.emergencyTitle}>Emergency Services</Text>
-            <Text style={styles.emergencySub}>
-              PRIORITY CONTACT • 911
+        {/* EMPTY STATE */}
+        {contacts.length === 0 ? (
+          <View style={{ alignItems: "center", marginTop: 60 }}>
+            <MaterialIcons name="group" size={70} color="#444" />
+            <Text style={{ color: "#777", marginTop: 15 }}>
+              No Trusted Contacts Added Yet
+            </Text>
+            <Text style={{ color: "#555", fontSize: 12, marginTop: 5 }}>
+              Tap + button to add someone
             </Text>
           </View>
-
-          <TouchableOpacity style={styles.callButton}>
-            <MaterialIcons name="call" size={20} color="#fff" />
-          </TouchableOpacity>
-        </View>
-
-        {/* Add Contact */}
-        <TouchableOpacity style={styles.addContact}>
-          <MaterialIcons name="person-add" size={22} color="#aaa" />
-          <Text style={styles.addText}>
-            Add New Trusted Contact
-          </Text>
-        </TouchableOpacity>
-
-        {/* Footer Note */}
-        <View style={styles.footer}>
-          <Text style={styles.footerText}>
-            SHIELD AI monitors environment sounds and movement patterns.
-            {"\n"}
-            You can manage notification triggers in Settings.
-          </Text>
-        </View>
+        ) : (
+          contacts.map((item) => (
+            <ContactCard key={item.id} contact={item} />
+          ))
+        )}
       </ScrollView>
 
-      {/* Floating Action Button */}
-      <TouchableOpacity style={styles.fab}>
+      {/* FAB */}
+      <TouchableOpacity
+        style={styles.fab}
+        onPress={() => router.push("/addcontact")}
+      >
         <MaterialIcons name="add" size={28} color="#fff" />
       </TouchableOpacity>
 
-      {/* Bottom Navigation */}
+      {/* NAVIGATION */}
       <View style={styles.navBar}>
-        <NavItem icon="home" label="Home" onPress={() => router.push("/dashboard")}/>
+        <NavItem icon="home" label="Home" onPress={() => router.push("/dashboard")} />
         <NavItem icon="group" label="Contacts" active />
-        <NavItem icon="explore" label="Safe Map" onPress={() => router.push("/safemap")}/>
-        <NavItem icon="person" label="Profile" onPress={() => router.push("/profile")}/>
+        <NavItem icon="explore" label="Safe Map" onPress={() => router.push("/safemap")} />
+        <NavItem icon="person" label="Profile" onPress={() => router.push("/profile")} />
       </View>
     </View>
   );
 }
 
-/* ---------- COMPONENTS ---------- */
+/* ---------- CONTACT CARD COMPONENT ---------- */
 
-const ContactCard = ({ name, relation, phone }: any) => (
-  <View style={styles.card}>
-    <View style={styles.avatar} />
+const ContactCard = ({ contact }: any) => {
+  const router = useRouter();
 
-    <View style={{ flex: 1 }}>
-      <Text style={styles.cardName}>{name}</Text>
-      <Text style={styles.cardSub}>
-        {relation} • {phone}
-      </Text>
+  return (
+    <View style={styles.card}>
+      <View style={styles.avatar}>
+        <MaterialIcons
+          name={
+            contact.gender === "male"
+              ? "man"
+              : contact.gender === "female"
+              ? "woman"
+              : "person"
+          }
+          size={30}
+          color="#ec1313"
+        />
+      </View>
+
+      <View style={{ flex: 1 }}>
+        <Text style={styles.cardName}>{contact.name}</Text>
+        <Text style={styles.cardSub}>
+          {contact.relation} • {contact.phone}
+        </Text>
+      </View>
+
+      <View style={styles.cardActions}>
+        <TouchableOpacity style={styles.iconButton}>
+          <MaterialIcons name="call" size={18} color="#ec1313" />
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.iconButton}>
+          <MaterialIcons name="chat-bubble" size={18} color="#ec1313" />
+        </TouchableOpacity>
+
+        {/* THREE DOT EDIT */}
+        <TouchableOpacity
+          onPress={() =>
+            router.push({
+              pathname: "/addcontact",
+              params: { contact: JSON.stringify(contact) },
+            })
+          }
+        >
+          <MaterialIcons name="more-vert" size={20} color="#777" />
+        </TouchableOpacity>
+      </View>
     </View>
+  );
+};
 
-    <View style={styles.cardActions}>
-      <TouchableOpacity style={styles.iconButton}>
-        <MaterialIcons name="call" size={18} color="#ec1313" />
-      </TouchableOpacity>
-
-      <TouchableOpacity style={styles.iconButton}>
-        <MaterialIcons name="chat-bubble" size={18} color="#ec1313" />
-      </TouchableOpacity>
-
-      <TouchableOpacity>
-        <MaterialIcons name="more-vert" size={18} color="#777" />
-      </TouchableOpacity>
-    </View>
-  </View>
-);
+/* ---------- NAV ITEM ---------- */
 
 const NavItem = ({ icon, label, active, onPress }: any) => (
   <TouchableOpacity style={styles.navItem} onPress={onPress}>
@@ -147,7 +174,6 @@ const NavItem = ({ icon, label, active, onPress }: any) => (
     </Text>
   </TouchableOpacity>
 );
-
 
 /* ---------- STYLES ---------- */
 
@@ -207,8 +233,10 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: "#333",
+    backgroundColor: "#2A1B1B",
     marginRight: 15,
+    alignItems: "center",
+    justifyContent: "center",
   },
 
   cardName: {
@@ -233,72 +261,6 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(236,19,19,0.1)",
     padding: 8,
     borderRadius: 20,
-  },
-
-  emergencyCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "rgba(236,19,19,0.1)",
-    borderWidth: 1,
-    borderColor: "rgba(236,19,19,0.3)",
-    marginHorizontal: 20,
-    padding: 15,
-    borderRadius: 15,
-    marginBottom: 20,
-  },
-
-  emergencyIcon: {
-    backgroundColor: "#ec1313",
-    padding: 12,
-    borderRadius: 30,
-    marginRight: 15,
-  },
-
-  emergencyTitle: {
-    color: "#fff",
-    fontWeight: "bold",
-  },
-
-  emergencySub: {
-    color: "#ec1313",
-    fontSize: 11,
-    marginTop: 4,
-  },
-
-  callButton: {
-    backgroundColor: "#ec1313",
-    padding: 10,
-    borderRadius: 25,
-  },
-
-  addContact: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 2,
-    borderStyle: "dashed",
-    borderColor: "#444",
-    marginHorizontal: 20,
-    padding: 15,
-    borderRadius: 15,
-    gap: 8,
-  },
-
-  addText: {
-    color: "#aaa",
-    fontWeight: "500",
-  },
-
-  footer: {
-    paddingHorizontal: 30,
-    marginTop: 30,
-    alignItems: "center",
-  },
-
-  footerText: {
-    color: "#666",
-    fontSize: 11,
-    textAlign: "center",
   },
 
   fab: {

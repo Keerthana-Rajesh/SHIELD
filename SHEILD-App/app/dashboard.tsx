@@ -140,7 +140,7 @@ export default function Dashboard() {
   <FeatureButton icon="group" label="Emergency Contacts" route="/contacts" />
   <FeatureButton icon="timer" label="Safety Timer" route="/timer" />
   <FeatureButton icon="location-on" label="Share Location" route="/location" />
-  <FeatureButton icon="phone-in-talk" label="Fake Call" route="/fakecall" />
+  <FeatureButton icon="phone-in-talk" label="Fake Call" route="/fake-call" />
   <FeatureButton icon="call" label="Helpline Numbers" route="/helpline" />
   <FeatureButton icon="verified-user" label="Trusted Circles" route="/circles" />
   <FeatureButton icon="report" label="Report Incident" route="/report" />

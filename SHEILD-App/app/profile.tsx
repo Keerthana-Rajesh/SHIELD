@@ -14,6 +14,7 @@ import { MaterialIcons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
+import * as ImagePicker from "expo-image-picker";
 
 export default function Profile() {
   const router = useRouter();
@@ -24,6 +25,7 @@ export default function Profile() {
   const [bloodGroup, setBloodGroup] = useState("");
   const [notes, setNotes] = useState("");
   const [aiEnabled, setAiEnabled] = useState(false);
+  const [profileImage, setProfileImage] = useState<string | null>(null);
 
   /* 🔥 Auto Refresh Profile */
   useFocusEffect(
@@ -83,6 +85,35 @@ export default function Profile() {
       Alert.alert("Server Error");
     }
   };
+  const pickImage = async () => {
+  try {
+    const permission =
+      await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+    if (!permission.granted) {
+      Alert.alert("Permission required to access gallery");
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.7,
+    });
+
+    if (!result.canceled) {
+      const uri = result.assets[0].uri;
+      setProfileImage(uri);
+
+      // optional: store locally
+      await AsyncStorage.setItem("profileImage", uri);
+    }
+  } catch (error) {
+    console.log(error);
+    Alert.alert("Image selection failed");
+  }
+};
 
   return (
     <View style={styles.container}>
@@ -98,16 +129,26 @@ export default function Profile() {
       <ScrollView contentContainerStyle={{ paddingBottom: 150 }}>
         {/* Profile Image */}
         <View style={styles.profileSection}>
-          <View style={styles.imageWrapper}>
-            <Image
-              source={{ uri: "https://i.pravatar.cc/300" }}
-              style={styles.profileImage}
-            />
-            <View style={styles.cameraOverlay}>
-              <MaterialIcons name="photo-camera" size={22} color="#fff" />
-            </View>
-          </View>
-        </View>
+  <TouchableOpacity style={styles.imageWrapper} onPress={pickImage}>
+    {profileImage ? (
+      <Image source={{ uri: profileImage }} style={styles.profileImage} />
+    ) : name ? (
+      <View style={styles.initialAvatar}>
+        <Text style={styles.initialText}>
+          {name.trim().charAt(0).toUpperCase()}
+        </Text>
+      </View>
+    ) : (
+      <View style={styles.placeholderAvatar}>
+        <MaterialIcons name="person" size={60} color="#888" />
+      </View>
+    )}
+
+    <View style={styles.cameraOverlay}>
+      <MaterialIcons name="photo-camera" size={22} color="#fff" />
+    </View>
+  </TouchableOpacity>
+</View>
 
         <View style={styles.form}>
           <InputField
@@ -317,4 +358,27 @@ const styles = StyleSheet.create({
   },
   navItem: { alignItems: "center" },
   navLabel: { fontSize: 11, marginTop: 2 },
+  initialAvatar: {
+  width: 130,
+  height: 130,
+  borderRadius: 65,
+  backgroundColor: "#ec1313",
+  justifyContent: "center",
+  alignItems: "center",
+},
+
+initialText: {
+  color: "#fff",
+  fontSize: 50,
+  fontWeight: "bold",
+},
+
+placeholderAvatar: {
+  width: 130,
+  height: 130,
+  borderRadius: 65,
+  backgroundColor: "#392828",
+  justifyContent: "center",
+  alignItems: "center",
+},
 });
