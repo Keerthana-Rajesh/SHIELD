@@ -231,3 +231,65 @@ app.put("/update-user/:email", (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
+
+app.post("/add-contact", (req, res) => {
+  const { email, name, relation, phone, location, notes, gender } = req.body;
+
+  const getUserQuery = "SELECT id FROM users WHERE email = ?";
+
+  db.query(getUserQuery, [email], (err, userResult) => {
+    if (err) return res.status(500).json(err);
+    if (userResult.length === 0)
+      return res.status(404).json({ message: "User not found" });
+
+    const userId = userResult[0].id;
+
+    const insertQuery = `
+      INSERT INTO contacts (user_id, name, relation, phone, location, notes, gender)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `;
+
+    db.query(
+      insertQuery,
+      [userId, name, relation, phone, location, notes, gender],
+      (err, result) => {
+        if (err) return res.status(500).json(err);
+        res.json({ message: "Contact added successfully" });
+      }
+    );
+  });
+});
+
+app.get("/contacts/:email", (req, res) => {
+  const { email } = req.params;
+
+  const query = `
+    SELECT c.* FROM contacts c
+    JOIN users u ON c.user_id = u.id
+    WHERE u.email = ?
+  `;
+
+  db.query(query, [email], (err, results) => {
+    if (err) return res.status(500).json(err);
+    res.json(results);
+  });
+});
+
+app.post("/update-contact", (req, res) => {
+  const { id, name, relation, phone, location, notes, gender } = req.body;
+
+  const query = `
+    UPDATE contacts
+    SET name=?, relation=?, phone=?, location=?, notes=?, gender=?
+    WHERE id=?
+  `;
+
+  db.query(
+    query,
+    [name, relation, phone, location, notes, gender, id],
+    (err, result) => {
+      if (err) return res.status(500).json(err);
+      res.json({ message: "Contact updated successfully" });
+    }
+  );
+});
