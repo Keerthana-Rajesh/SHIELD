@@ -10,7 +10,7 @@ import { MaterialIcons } from "@expo/vector-icons";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "expo-router";
 import { useLocalSearchParams } from "expo-router";
-import { createAudioPlayer, setAudioModeAsync } from "expo-audio";
+import { Audio } from "expo-av";
 
 export default function ActiveCall() {
   const router = useRouter();
@@ -19,63 +19,68 @@ export default function ActiveCall() {
   const callerName = (params.name as string) || "Unknown";
   const recordingUri = (params.recordingUri as string) || "";
   const gender = (params.gender as string) || "female";
+// 🔊 Sound reference (expo-av)
+const soundRef = useRef<Audio.Sound | null>(null);
+const [isPlaying, setIsPlaying] = useState(false);
 
-  const playerRef = useRef<ReturnType<typeof createAudioPlayer> | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
+// ⏱ Call Timer
+useEffect(() => {
+  const interval = setInterval(() => {
+    setSeconds((prev) => prev + 1);
+  }, 1000);
 
-  // ⏱ Call Timer
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setSeconds((prev) => prev + 1);
-    }, 1000);
-    return () => clearInterval(interval);
-  }, []);
+  return () => clearInterval(interval);
+}, []);
+console.log("ActiveCall received URI:", recordingUri);
+// 🎙 Play recorded voice when call screen loads
 
-  // 🎙 Play pitch-shifted recorded voice
-  useEffect(() => {
-    if (!recordingUri) return;
+useEffect(() => {
+  if (!recordingUri) {
+    console.log("No recordingUri found");
+    return;
+  }
 
-    let mounted = true;
+  const playSound = async () => {
+    try {
+      console.log("Trying to play:", recordingUri);
 
-    const loadAndPlay = async () => {
-      try {
-        await setAudioModeAsync({
-          playsInSilentMode: true,
-          allowsRecording: false,
-        });
+      // 🔥 HARD RESET AUDIO SESSION
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+        interruptionModeIOS: 1,
+        shouldDuckAndroid: false,
+        interruptionModeAndroid: 1,
+        playThroughEarpieceAndroid: false, // 🔥 MUST BE FALSE
+        staysActiveInBackground: false,
+      });
 
-        const rate = gender === "male" ? 0.75 : 1.35;
-
-        const player = createAudioPlayer({ uri: recordingUri });
-        player.loop = true;
-        player.volume = 1.0;
-        player.setPlaybackRate(rate);
-
-        if (!mounted) {
-          player.remove();
-          return;
+      const { sound } = await Audio.Sound.createAsync(
+        { uri: recordingUri },
+        {
+          shouldPlay: true,
+          isLooping: true,
+          volume: 1.0,
         }
+      );
 
-        playerRef.current = player;
-        player.play();
-        setIsPlaying(true);
-      } catch (err) {
-        console.error("Active call audio error:", err);
-      }
-    };
+      soundRef.current = sound;
 
-    // Small delay to let the screen settle
-    const timer = setTimeout(loadAndPlay, 500);
+    } catch (error) {
+      console.log("Playback error:", error);
+    }
+  };
 
-    return () => {
-      mounted = false;
-      clearTimeout(timer);
-      if (playerRef.current) {
-        playerRef.current.remove();
-        playerRef.current = null;
-      }
-    };
-  }, []);
+  playSound();
+
+  return () => {
+    if (soundRef.current) {
+      soundRef.current.unloadAsync();
+      soundRef.current = null;
+    }
+  };
+}, [recordingUri]);
+
 
   const formatTime = () => {
     const mins = Math.floor(seconds / 60)
@@ -85,13 +90,13 @@ export default function ActiveCall() {
     return `${mins}:${secs}`;
   };
 
-  const handleEndCall = () => {
-    if (playerRef.current) {
-      playerRef.current.remove();
-      playerRef.current = null;
-    }
-    router.replace("/fake-call");
-  };
+  const handleEndCall = async () => {
+  if (soundRef.current) {
+    await soundRef.current.unloadAsync();
+    soundRef.current = null;
+  }
+  router.back();
+};
 
   return (
     <View style={styles.container}>

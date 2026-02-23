@@ -12,14 +12,9 @@ import {
 import { MaterialIcons } from "@expo/vector-icons";
 import { useState, useRef, useEffect } from "react";
 import { useRouter } from "expo-router";
-import {
-  useAudioRecorder,
-  RecordingPresets,
-  AudioModule,
-  setAudioModeAsync,
-  useAudioRecorderState,
-  createAudioPlayer,
-} from "expo-audio";
+import { Audio } from "expo-av";
+import * as FileSystem from "expo-file-system/legacy";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 type RecordingMode = "idle" | "recording" | "paused" | "recorded";
 type Gender = "male" | "female";
@@ -34,90 +29,32 @@ export default function FakeCallSetup() {
   const [calling, setCalling] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const [selectedVoice, setSelectedVoice] = useState(
-    "Where are you? I'm outside."
-  );
 
-  // Gender — shared between voice message and record voice
   const [selectedGender, setSelectedGender] = useState<Gender>("female");
 
-  // Recording state
-  const [recordingMode, setRecordingMode] = useState<RecordingMode>("idle");
+  const [recordingMode, setRecordingMode] =
+    useState<RecordingMode>("idle");
   const [recordingUri, setRecordingUri] = useState<string | null>(null);
-  const [isPreviewing, setIsPreviewing] = useState(false);
   const [recordingDuration, setRecordingDuration] = useState(0);
-  const durationIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const previewPlayerRef = useRef<ReturnType<typeof createAudioPlayer> | null>(null);
+  const [isPreviewing, setIsPreviewing] = useState(false);
 
-  // expo-audio recorder hook
-  const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
-  const recorderState = useAudioRecorderState(audioRecorder);
+  const [recording, setRecording] =
+    useState<Audio.Recording | null>(null);
+    const [selectedVoice, setSelectedVoice] = useState(
+  "Where are you? I'm outside."
+);
 
-  // Pulse animation for recording indicator
+  const previewSoundRef = useRef<Audio.Sound | null>(null);
+  const durationIntervalRef =
+    useRef<ReturnType<typeof setInterval> | null>(null);
+
   const pulseAnim = useRef(new Animated.Value(0.4)).current;
   const pulseOpacity = useRef(new Animated.Value(0)).current;
+  const [savedVoices, setSavedVoices] = useState<any[]>([]);
 
-  // Request mic permission on mount
-  useEffect(() => {
-    (async () => {
-      const status = await AudioModule.requestRecordingPermissionsAsync();
-      if (!status.granted) {
-        Alert.alert("Permission Required", "Microphone access is needed to record your voice.");
-      }
-    })();
-  }, []);
-
-  useEffect(() => {
-    if (recordingMode === "recording") {
-      pulseOpacity.setValue(1);
-      const pulse = Animated.loop(
-        Animated.sequence([
-          Animated.timing(pulseAnim, {
-            toValue: 1.6,
-            duration: 800,
-            easing: Easing.out(Easing.ease),
-            useNativeDriver: true,
-          }),
-          Animated.timing(pulseAnim, {
-            toValue: 0.4,
-            duration: 800,
-            easing: Easing.in(Easing.ease),
-            useNativeDriver: true,
-          }),
-        ])
-      );
-      pulse.start();
-      return () => pulse.stop();
-    } else {
-      pulseAnim.setValue(0.4);
-      pulseOpacity.setValue(0);
-    }
-  }, [recordingMode]);
-
-  // Duration timer
-  useEffect(() => {
-    if (recordingMode === "recording") {
-      durationIntervalRef.current = setInterval(() => {
-        setRecordingDuration((p) => p + 1);
-      }, 1000);
-    } else if (recordingMode === "idle") {
-      setRecordingDuration(0);
-    }
-    return () => {
-      if (durationIntervalRef.current) clearInterval(durationIntervalRef.current);
-    };
-  }, [recordingMode]);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (previewPlayerRef.current) {
-        previewPlayerRef.current.remove();
-        previewPlayerRef.current = null;
-      }
-    };
-  }, []);
-
+  // -----------------------------
+  // Callers & Voices
+  // -----------------------------
   const callers = [
     { name: "Mom" },
     { name: "Dad" },
@@ -125,132 +62,212 @@ export default function FakeCallSetup() {
     { name: "Best Friend" },
   ];
 
-  const voices = [
-    "Where are you? I'm outside.",
-    "Hey, are you almost home?",
-    "I'm waiting at the corner.",
-  ];
+  // ===============================
+// 🗣 PRESET VOICES
+// ===============================
+
+const voices = [
+  "Where are you? I'm outside.",
+  "Hey, are you almost home?",
+  "I'm waiting at the corner.",
+];
+
+  // -----------------------------
+  // Permission
+  // -----------------------------
+
+  useEffect(() => {
+  const loadVoices = async () => {
+    const data = await AsyncStorage.getItem("RECORDED_VOICES");
+    if (data) {
+      setSavedVoices(JSON.parse(data));
+    }
+  };
+  loadVoices();
+}, []);
+
+  useEffect(() => {
+    (async () => {
+      const { status } = await Audio.requestPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert(
+          "Permission Required",
+          "Microphone access is needed to record your voice."
+        );
+      }
+    })();
+  }, []);
+
+  // -----------------------------
+  // Duration Timer
+  // -----------------------------
+  useEffect(() => {
+    if (recordingMode === "recording") {
+      durationIntervalRef.current = setInterval(() => {
+        setRecordingDuration((prev) => prev + 1);
+      }, 1000);
+    } else {
+      if (durationIntervalRef.current) {
+        clearInterval(durationIntervalRef.current);
+      }
+    }
+
+    return () => {
+      if (durationIntervalRef.current) {
+        clearInterval(durationIntervalRef.current);
+      }
+    };
+  }, [recordingMode]);
 
   const formatDuration = (s: number) => {
-    const m = Math.floor(s / 60).toString().padStart(2, "0");
+    const m = Math.floor(s / 60)
+      .toString()
+      .padStart(2, "0");
     const ss = (s % 60).toString().padStart(2, "0");
     return `${m}:${ss}`;
   };
 
+  // -----------------------------
+  // Recording Functions
+  // -----------------------------
   const startRecording = async () => {
     try {
-      const status = await AudioModule.requestRecordingPermissionsAsync();
-      if (!status.granted) {
-        Alert.alert("Permission Required", "Microphone access is needed to record your voice.");
-        return;
-      }
-
-      await setAudioModeAsync({
-        playsInSilentMode: true,
-        allowsRecording: true,
-      });
-
-      await audioRecorder.prepareToRecordAsync();
-      audioRecorder.record();
+      if (recording) return;
 
       setRecordingMode("recording");
       setRecordingDuration(0);
-    } catch (err) {
-      console.error("Recording error:", err);
-      Alert.alert("Error", "Could not start recording. Please try again.");
+      setRecordingUri(null);
+
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+      });
+
+      const newRecording = new Audio.Recording();
+
+      await newRecording.prepareToRecordAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY
+      );
+
+      await newRecording.startAsync();
+      setRecording(newRecording);
+
+      console.log("Recording started");
+    } catch (error) {
+      console.log("Start recording error:", error);
+      setRecordingMode("idle");
     }
   };
 
   const pauseRecording = async () => {
-    try {
-      audioRecorder.pause();
-      setRecordingMode("paused");
-    } catch (err) {
-      console.error("Pause error:", err);
-    }
+    if (!recording) return;
+    await recording.pauseAsync();
+    setRecordingMode("paused");
   };
 
   const resumeRecording = async () => {
-    try {
-      audioRecorder.record();
-      setRecordingMode("recording");
-    } catch (err) {
-      console.error("Resume error:", err);
-    }
+    if (!recording) return;
+    await recording.startAsync();
+    setRecordingMode("recording");
   };
 
   const stopRecording = async () => {
-    try {
-      await audioRecorder.stop();
-      const uri = audioRecorder.uri;
-      console.log("Recording saved to:", uri);
-      setRecordingUri(uri ?? null);
-      setRecordingMode("recorded");
+  try {
+    if (!recording) return;
 
-      await setAudioModeAsync({
-        playsInSilentMode: true,
-        allowsRecording: false,
-      });
-    } catch (err) {
-      console.error("Stop error:", err);
-      Alert.alert("Error", "Could not save recording. Please try again.");
+    await recording.stopAndUnloadAsync();
+    const tempUri = recording.getURI();
+    if (!tempUri) return;
+
+    const newPath =
+      FileSystem.documentDirectory +
+      `recorded-voice-${Date.now()}.m4a`;
+
+    await FileSystem.copyAsync({
+      from: tempUri,
+      to: newPath,
+    });
+
+    console.log("Saved permanently:", newPath);
+
+    setRecordingUri(newPath);
+    setRecording(null);
+    setRecordingMode("recorded");
+
+  } catch (error) {
+    console.log("Stop recording error:", error);
+  }
+};
+
+  const previewRecording = async () => {
+  try {
+    if (!recordingUri) {
+      Alert.alert("No recording found");
+      return;
     }
-  };
 
-  const clearRecording = () => {
-    if (previewPlayerRef.current) {
-      previewPlayerRef.current.remove();
-      previewPlayerRef.current = null;
+    // 🔥 VERY IMPORTANT FOR ANDROID
+    await Audio.setAudioModeAsync({
+      allowsRecordingIOS: false,
+      playsInSilentModeIOS: true,
+      shouldDuckAndroid: false,
+      playThroughEarpieceAndroid: false, // 🔥 THIS FIXES LOW/NO SOUND
+      staysActiveInBackground: false,
+    });
+
+    // If already playing → stop
+    if (previewSoundRef.current) {
+      await previewSoundRef.current.stopAsync();
+      await previewSoundRef.current.unloadAsync();
+      previewSoundRef.current = null;
+      setIsPreviewing(false);
+      return;
+    }
+
+    const { sound } = await Audio.Sound.createAsync(
+      { uri: recordingUri },
+      {
+        shouldPlay: true,
+        volume: 1.0, // 🔥 Force full volume
+      }
+    );
+
+    previewSoundRef.current = sound;
+    setIsPreviewing(true);
+
+    sound.setOnPlaybackStatusUpdate((status: any) => {
+      if (status.didJustFinish) {
+        setIsPreviewing(false);
+      }
+    });
+
+  } catch (error) {
+    console.log("Preview error:", error);
+  }
+};
+
+  const clearRecording = async () => {
+    if (previewSoundRef.current) {
+      await previewSoundRef.current.unloadAsync();
+      previewSoundRef.current = null;
     }
     setRecordingUri(null);
     setRecordingMode("idle");
-    setIsPreviewing(false);
     setRecordingDuration(0);
   };
 
-  const previewRecording = async () => {
-    if (!recordingUri) return;
-    try {
-      // Toggle off
-      if (previewPlayerRef.current) {
-        previewPlayerRef.current.remove();
-        previewPlayerRef.current = null;
-        setIsPreviewing(false);
-        return;
-      }
+  const deleteVoice = async (uri: string) => {
+  try {
+    await FileSystem.deleteAsync(uri, { idempotent: true });
+    console.log("Deleted:", uri);
+  } catch (error) {
+    console.log("Delete error:", error);
+  }
+};
 
-      await setAudioModeAsync({
-        playsInSilentMode: true,
-        allowsRecording: false,
-      });
-
-      setIsPreviewing(true);
-      const rate = selectedGender === "male" ? 0.75 : 1.35;
-
-      const player = createAudioPlayer({ uri: recordingUri });
-      player.volume = 1.0;
-      player.loop = false;
-      player.setPlaybackRate(rate);
-
-      previewPlayerRef.current = player;
-      player.play();
-
-      // Listen for playback end
-      const checkInterval = setInterval(() => {
-        if (player.currentTime >= player.duration && player.duration > 0 && !player.playing) {
-          clearInterval(checkInterval);
-          player.remove();
-          previewPlayerRef.current = null;
-          setIsPreviewing(false);
-        }
-      }, 300);
-    } catch (err) {
-      console.error("Preview error:", err);
-      setIsPreviewing(false);
-      Alert.alert("Error", "Could not play preview.");
-    }
-  };
-
+  // -----------------------------
+  // Call Trigger
+  // -----------------------------
   const triggerCall = () => {
     router.push({
       pathname: "/incoming",
@@ -262,23 +279,28 @@ export default function FakeCallSetup() {
     });
   };
 
+  // -----------------------------
+  // Timer Logic
+  // -----------------------------
   const startTimer = () => {
-    const totalSeconds = (parseInt(minutes) || 0) * 60 + (parseInt(seconds) || 0);
+    const totalSeconds =
+      (parseInt(minutes) || 0) * 60 +
+      (parseInt(seconds) || 0);
+
     if (totalSeconds <= 0) {
       triggerCall();
       return;
     }
+
     setCalling(true);
     setCountdown(totalSeconds);
+
     intervalRef.current = setInterval(() => {
-      setCountdown((prev) => {
-        if (prev !== null && prev <= 1) {
-          clearInterval(intervalRef.current!);
-          return 0;
-        }
-        return prev !== null ? prev - 1 : null;
-      });
+      setCountdown((prev) =>
+        prev && prev > 1 ? prev - 1 : 0
+      );
     }, 1000);
+
     timerRef.current = setTimeout(() => {
       setCalling(false);
       setCountdown(null);
@@ -292,6 +314,7 @@ export default function FakeCallSetup() {
     setCalling(false);
     setCountdown(null);
   };
+
 
   return (
     <View style={styles.container}>

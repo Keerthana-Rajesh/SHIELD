@@ -48,8 +48,8 @@ useEffect(() => {
     const email = await AsyncStorage.getItem("userEmail");
 
     const url = params.contact
-      ? "http://192.168.220.8:5000/update-contact"
-      : "http://192.168.220.8:5000/add-contact";
+      ? "http://10.200.110.103:5000/update-contact"
+      : "http://10.200.110.103:5000/add-contact";
 
     const bodyData = {
   email,

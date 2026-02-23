@@ -62,7 +62,7 @@ export default function Profile() {
   const handleUpdate = async () => {
     try {
       const response = await fetch(
-        `http://192.168.220.8:5000/update-user/${email}`,
+        `http://10.200.110.103:5000/update-user/${email}`,
         {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
