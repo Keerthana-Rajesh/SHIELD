@@ -10,20 +10,71 @@ import { MaterialIcons } from "@expo/vector-icons";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "expo-router";
 import { useLocalSearchParams } from "expo-router";
+import { createAudioPlayer, setAudioModeAsync } from "expo-audio";
 
 export default function ActiveCall() {
   const router = useRouter();
   const [seconds, setSeconds] = useState(5);
   const params = useLocalSearchParams();
   const callerName = (params.name as string) || "Unknown";
+  const recordingUri = (params.recordingUri as string) || "";
+  const gender = (params.gender as string) || "female";
+
+  const playerRef = useRef<ReturnType<typeof createAudioPlayer> | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
 
   // ⏱ Call Timer
   useEffect(() => {
     const interval = setInterval(() => {
       setSeconds((prev) => prev + 1);
     }, 1000);
-
     return () => clearInterval(interval);
+  }, []);
+
+  // 🎙 Play pitch-shifted recorded voice
+  useEffect(() => {
+    if (!recordingUri) return;
+
+    let mounted = true;
+
+    const loadAndPlay = async () => {
+      try {
+        await setAudioModeAsync({
+          playsInSilentMode: true,
+          allowsRecording: false,
+        });
+
+        const rate = gender === "male" ? 0.75 : 1.35;
+
+        const player = createAudioPlayer({ uri: recordingUri });
+        player.loop = true;
+        player.volume = 1.0;
+        player.setPlaybackRate(rate);
+
+        if (!mounted) {
+          player.remove();
+          return;
+        }
+
+        playerRef.current = player;
+        player.play();
+        setIsPlaying(true);
+      } catch (err) {
+        console.error("Active call audio error:", err);
+      }
+    };
+
+    // Small delay to let the screen settle
+    const timer = setTimeout(loadAndPlay, 500);
+
+    return () => {
+      mounted = false;
+      clearTimeout(timer);
+      if (playerRef.current) {
+        playerRef.current.remove();
+        playerRef.current = null;
+      }
+    };
   }, []);
 
   const formatTime = () => {
@@ -34,12 +85,18 @@ export default function ActiveCall() {
     return `${mins}:${secs}`;
   };
 
+  const handleEndCall = () => {
+    if (playerRef.current) {
+      playerRef.current.remove();
+      playerRef.current = null;
+    }
+    router.replace("/fake-call");
+  };
+
   return (
     <View style={styles.container}>
-
       {/* HEADER INFO */}
       <View style={styles.header}>
-
         <View style={styles.avatar}>
           <Text style={styles.initialText}>
             {callerName.charAt(0).toUpperCase()}
@@ -50,7 +107,21 @@ export default function ActiveCall() {
         <Text style={styles.label}>Mobile</Text>
         <Text style={styles.timer}>{formatTime()}</Text>
 
+        {/* Voice indicator badge */}
+        {recordingUri ? (
+          <View style={[styles.voiceBadge, isPlaying ? styles.voiceBadgeActive : styles.voiceBadgeInactive]}>
+            <MaterialIcons
+              name={isPlaying ? "volume-up" : "mic"}
+              size={14}
+              color={isPlaying ? "#22c55e" : "#888"}
+            />
+            <Text style={[styles.voiceBadgeText, !isPlaying && { color: "#888" }]}>
+              {gender === "male" ? "👨 Male" : "👩 Female"} voice {isPlaying ? "playing" : "loading..."}
+            </Text>
+          </View>
+        ) : null}
       </View>
+
       {/* WAVEFORM */}
       <View style={styles.waveContainer}>
         {[...Array(10)].map((_, i) => (
@@ -70,15 +141,8 @@ export default function ActiveCall() {
 
       {/* END CALL */}
       <View style={{ alignItems: "center", marginBottom: 40 }}>
-        <TouchableOpacity
-          style={styles.endButton}
-          onPress={() => router.replace("/fake-call")}
-        >
-          <MaterialIcons
-            name="call-end"
-            size={36}
-            color="#fff"
-          />
+        <TouchableOpacity style={styles.endButton} onPress={handleEndCall}>
+          <MaterialIcons name="call-end" size={36} color="#fff" />
         </TouchableOpacity>
       </View>
     </View>
@@ -142,11 +206,9 @@ const styles = StyleSheet.create({
     paddingTop: 70,
     justifyContent: "space-between",
   },
-
   header: {
     alignItems: "center",
   },
-
   avatar: {
     width: 100,
     height: 100,
@@ -156,19 +218,16 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 20,
   },
-
   name: {
     color: "#fff",
     fontSize: 28,
     fontWeight: "bold",
   },
-
   label: {
     color: "#888",
     fontSize: 16,
     marginTop: 4,
   },
-
   timer: {
     marginTop: 10,
     fontSize: 20,
@@ -176,7 +235,30 @@ const styles = StyleSheet.create({
     fontFamily: "monospace",
     letterSpacing: 3,
   },
-
+  voiceBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 20,
+    borderWidth: 1,
+  },
+  voiceBadgeActive: {
+    backgroundColor: "rgba(34,197,94,0.12)",
+    borderColor: "rgba(34,197,94,0.3)",
+  },
+  voiceBadgeInactive: {
+    backgroundColor: "rgba(255,255,255,0.05)",
+    borderColor: "rgba(255,255,255,0.1)",
+  },
+  voiceBadgeText: {
+    color: "#22c55e",
+    fontSize: 11,
+    fontWeight: "bold",
+    letterSpacing: 0.5,
+  },
   waveContainer: {
     flexDirection: "row",
     justifyContent: "center",
@@ -184,21 +266,18 @@ const styles = StyleSheet.create({
     gap: 6,
     marginVertical: 30,
   },
-
   bar: {
     width: 4,
     height: 40,
     backgroundColor: "#ec5b13",
     borderRadius: 2,
   },
-
   grid: {
     flexDirection: "row",
     flexWrap: "wrap",
     justifyContent: "space-around",
     paddingHorizontal: 20,
   },
-
   controlButton: {
     width: 65,
     height: 65,
@@ -209,13 +288,11 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
-
   controlLabel: {
     color: "#888",
     fontSize: 12,
     marginTop: 6,
   },
-
   endButton: {
     width: 80,
     height: 80,

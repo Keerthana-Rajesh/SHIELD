@@ -5,10 +5,24 @@ import {
   TouchableOpacity,
   ScrollView,
   TextInput,
+  Animated,
+  Easing,
+  Alert,
 } from "react-native";
 import { MaterialIcons } from "@expo/vector-icons";
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useRouter } from "expo-router";
+import {
+  useAudioRecorder,
+  RecordingPresets,
+  AudioModule,
+  setAudioModeAsync,
+  useAudioRecorderState,
+  createAudioPlayer,
+} from "expo-audio";
+
+type RecordingMode = "idle" | "recording" | "paused" | "recorded";
+type Gender = "male" | "female";
 
 export default function FakeCallSetup() {
   const router = useRouter();
@@ -21,8 +35,88 @@ export default function FakeCallSetup() {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [selectedVoice, setSelectedVoice] = useState(
-    "Where are you? I’m outside."
+    "Where are you? I'm outside."
   );
+
+  // Gender — shared between voice message and record voice
+  const [selectedGender, setSelectedGender] = useState<Gender>("female");
+
+  // Recording state
+  const [recordingMode, setRecordingMode] = useState<RecordingMode>("idle");
+  const [recordingUri, setRecordingUri] = useState<string | null>(null);
+  const [isPreviewing, setIsPreviewing] = useState(false);
+  const [recordingDuration, setRecordingDuration] = useState(0);
+  const durationIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const previewPlayerRef = useRef<ReturnType<typeof createAudioPlayer> | null>(null);
+
+  // expo-audio recorder hook
+  const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recorderState = useAudioRecorderState(audioRecorder);
+
+  // Pulse animation for recording indicator
+  const pulseAnim = useRef(new Animated.Value(0.4)).current;
+  const pulseOpacity = useRef(new Animated.Value(0)).current;
+
+  // Request mic permission on mount
+  useEffect(() => {
+    (async () => {
+      const status = await AudioModule.requestRecordingPermissionsAsync();
+      if (!status.granted) {
+        Alert.alert("Permission Required", "Microphone access is needed to record your voice.");
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (recordingMode === "recording") {
+      pulseOpacity.setValue(1);
+      const pulse = Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, {
+            toValue: 1.6,
+            duration: 800,
+            easing: Easing.out(Easing.ease),
+            useNativeDriver: true,
+          }),
+          Animated.timing(pulseAnim, {
+            toValue: 0.4,
+            duration: 800,
+            easing: Easing.in(Easing.ease),
+            useNativeDriver: true,
+          }),
+        ])
+      );
+      pulse.start();
+      return () => pulse.stop();
+    } else {
+      pulseAnim.setValue(0.4);
+      pulseOpacity.setValue(0);
+    }
+  }, [recordingMode]);
+
+  // Duration timer
+  useEffect(() => {
+    if (recordingMode === "recording") {
+      durationIntervalRef.current = setInterval(() => {
+        setRecordingDuration((p) => p + 1);
+      }, 1000);
+    } else if (recordingMode === "idle") {
+      setRecordingDuration(0);
+    }
+    return () => {
+      if (durationIntervalRef.current) clearInterval(durationIntervalRef.current);
+    };
+  }, [recordingMode]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (previewPlayerRef.current) {
+        previewPlayerRef.current.remove();
+        previewPlayerRef.current = null;
+      }
+    };
+  }, []);
 
   const callers = [
     { name: "Mom" },
@@ -32,15 +126,139 @@ export default function FakeCallSetup() {
   ];
 
   const voices = [
-    "Where are you? I’m outside.",
+    "Where are you? I'm outside.",
     "Hey, are you almost home?",
     "I'm waiting at the corner.",
   ];
 
+  const formatDuration = (s: number) => {
+    const m = Math.floor(s / 60).toString().padStart(2, "0");
+    const ss = (s % 60).toString().padStart(2, "0");
+    return `${m}:${ss}`;
+  };
+
+  const startRecording = async () => {
+    try {
+      const status = await AudioModule.requestRecordingPermissionsAsync();
+      if (!status.granted) {
+        Alert.alert("Permission Required", "Microphone access is needed to record your voice.");
+        return;
+      }
+
+      await setAudioModeAsync({
+        playsInSilentMode: true,
+        allowsRecording: true,
+      });
+
+      await audioRecorder.prepareToRecordAsync();
+      audioRecorder.record();
+
+      setRecordingMode("recording");
+      setRecordingDuration(0);
+    } catch (err) {
+      console.error("Recording error:", err);
+      Alert.alert("Error", "Could not start recording. Please try again.");
+    }
+  };
+
+  const pauseRecording = async () => {
+    try {
+      audioRecorder.pause();
+      setRecordingMode("paused");
+    } catch (err) {
+      console.error("Pause error:", err);
+    }
+  };
+
+  const resumeRecording = async () => {
+    try {
+      audioRecorder.record();
+      setRecordingMode("recording");
+    } catch (err) {
+      console.error("Resume error:", err);
+    }
+  };
+
+  const stopRecording = async () => {
+    try {
+      await audioRecorder.stop();
+      const uri = audioRecorder.uri;
+      console.log("Recording saved to:", uri);
+      setRecordingUri(uri ?? null);
+      setRecordingMode("recorded");
+
+      await setAudioModeAsync({
+        playsInSilentMode: true,
+        allowsRecording: false,
+      });
+    } catch (err) {
+      console.error("Stop error:", err);
+      Alert.alert("Error", "Could not save recording. Please try again.");
+    }
+  };
+
+  const clearRecording = () => {
+    if (previewPlayerRef.current) {
+      previewPlayerRef.current.remove();
+      previewPlayerRef.current = null;
+    }
+    setRecordingUri(null);
+    setRecordingMode("idle");
+    setIsPreviewing(false);
+    setRecordingDuration(0);
+  };
+
+  const previewRecording = async () => {
+    if (!recordingUri) return;
+    try {
+      // Toggle off
+      if (previewPlayerRef.current) {
+        previewPlayerRef.current.remove();
+        previewPlayerRef.current = null;
+        setIsPreviewing(false);
+        return;
+      }
+
+      await setAudioModeAsync({
+        playsInSilentMode: true,
+        allowsRecording: false,
+      });
+
+      setIsPreviewing(true);
+      const rate = selectedGender === "male" ? 0.75 : 1.35;
+
+      const player = createAudioPlayer({ uri: recordingUri });
+      player.volume = 1.0;
+      player.loop = false;
+      player.setPlaybackRate(rate);
+
+      previewPlayerRef.current = player;
+      player.play();
+
+      // Listen for playback end
+      const checkInterval = setInterval(() => {
+        if (player.currentTime >= player.duration && player.duration > 0 && !player.playing) {
+          clearInterval(checkInterval);
+          player.remove();
+          previewPlayerRef.current = null;
+          setIsPreviewing(false);
+        }
+      }, 300);
+    } catch (err) {
+      console.error("Preview error:", err);
+      setIsPreviewing(false);
+      Alert.alert("Error", "Could not play preview.");
+    }
+  };
+
   const triggerCall = () => {
     router.push({
       pathname: "/incoming",
-      params: { name: selectedCaller },
+      params: {
+        name: selectedCaller,
+        recordingUri: recordingUri ?? "",
+        gender: selectedGender,
+      },
     });
   };
 
@@ -82,17 +300,20 @@ export default function FakeCallSetup() {
         <TouchableOpacity onPress={() => router.back()}>
           <MaterialIcons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>
-
         <Text style={styles.headerTitle}>Fake Call Setup</Text>
-
         <MaterialIcons name="info-outline" size={24} color="#fff" />
       </View>
 
-      <ScrollView contentContainerStyle={{ paddingBottom: 120 }}>
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{ paddingBottom: 140 }}
+        showsVerticalScrollIndicator={true}
+        keyboardShouldPersistTaps="handled"
+        nestedScrollEnabled={true}
+      >
         {/* SELECT CALLER */}
         <Text style={styles.sectionTitle}>SELECT CALLER</Text>
-
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} nestedScrollEnabled={true}>
           {callers.map((caller) => (
             <TouchableOpacity
               key={caller.name}
@@ -102,9 +323,7 @@ export default function FakeCallSetup() {
               <View
                 style={[
                   styles.avatarBorder,
-                  selectedCaller === caller.name && {
-                    borderColor: "#ec1313",
-                  },
+                  selectedCaller === caller.name && { borderColor: "#ec1313" },
                 ]}
               >
                 <View style={styles.initialAvatar}>
@@ -113,7 +332,6 @@ export default function FakeCallSetup() {
                   </Text>
                 </View>
               </View>
-
               <Text style={styles.callerName}>{caller.name}</Text>
               <Text style={styles.callerSub}>Mobile</Text>
             </TouchableOpacity>
@@ -122,7 +340,6 @@ export default function FakeCallSetup() {
 
         {/* TIMER */}
         <Text style={styles.sectionTitle}>SET TIMER</Text>
-
         <View style={styles.timerRow}>
           <View style={styles.timeInputBox}>
             <TextInput
@@ -134,9 +351,7 @@ export default function FakeCallSetup() {
             />
             <Text style={styles.timeLabel}>min</Text>
           </View>
-
           <Text style={styles.timeSeparator}>:</Text>
-
           <View style={styles.timeInputBox}>
             <TextInput
               style={styles.timeInput}
@@ -155,16 +370,38 @@ export default function FakeCallSetup() {
           </Text>
         )}
 
+        {/* VOICE TYPE (shared by voice message + record) */}
+        <Text style={styles.sectionTitle}>VOICE TYPE</Text>
+        <View style={styles.genderRow}>
+          <TouchableOpacity
+            style={[styles.genderPill, selectedGender === "male" && styles.genderPillActive]}
+            onPress={() => setSelectedGender("male")}
+          >
+            <Text style={styles.genderIcon}>👨</Text>
+            <Text style={[styles.genderLabel, selectedGender === "male" && styles.genderLabelActive]}>
+              Male
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.genderPill, selectedGender === "female" && styles.genderPillActive]}
+            onPress={() => setSelectedGender("female")}
+          >
+            <Text style={styles.genderIcon}>👩</Text>
+            <Text style={[styles.genderLabel, selectedGender === "female" && styles.genderLabelActive]}>
+              Female
+            </Text>
+          </TouchableOpacity>
+        </View>
+        <Text style={styles.hintText}>
+          Applies to both voice messages and your recorded voice
+        </Text>
+
         {/* VOICE MESSAGE */}
         <Text style={styles.sectionTitle}>VOICE MESSAGE</Text>
-
         {voices.map((voice) => (
           <TouchableOpacity
             key={voice}
-            style={[
-              styles.voiceCard,
-              selectedVoice === voice && styles.voiceSelected,
-            ]}
+            style={[styles.voiceCard, selectedVoice === voice && styles.voiceSelected]}
             onPress={() => setSelectedVoice(voice)}
           >
             <Text style={styles.voiceText}>{voice}</Text>
@@ -178,16 +415,116 @@ export default function FakeCallSetup() {
           style={styles.input}
         />
 
-        {/* RECORD BUTTON */}
-        <TouchableOpacity style={styles.recordButton}>
-          <MaterialIcons name="mic" size={20} color="#ec1313" />
-          <Text style={styles.recordText}>Record Your Own</Text>
-        </TouchableOpacity>
+        {/* RECORD YOUR VOICE */}
+        <Text style={styles.sectionTitle}>RECORD YOUR VOICE</Text>
+
+        <View style={styles.recordSection}>
+          {/* == IDLE STATE == */}
+          {recordingMode === "idle" && (
+            <TouchableOpacity style={styles.recordMicContainer} onPress={startRecording}>
+              <View style={styles.micCircle}>
+                <MaterialIcons name="mic" size={32} color="#fff" />
+              </View>
+              <Text style={styles.recordingLabel}>Tap to Record Your Voice</Text>
+            </TouchableOpacity>
+          )}
+
+          {/* == RECORDING STATE == */}
+          {recordingMode === "recording" && (
+            <View style={styles.recordMicContainer}>
+              {/* Pulse ring */}
+              <View style={styles.pulseWrapper}>
+                <Animated.View
+                  style={[
+                    styles.pulseRing,
+                    {
+                      transform: [{ scale: pulseAnim }],
+                      opacity: pulseOpacity,
+                    },
+                  ]}
+                />
+                <View style={[styles.micCircle, styles.micCircleRecording]}>
+                  <MaterialIcons name="mic" size={32} color="#fff" />
+                </View>
+              </View>
+
+              <Text style={[styles.recordingLabel, { color: "#ec1313" }]}>
+                ● Recording {formatDuration(recordingDuration)}
+              </Text>
+
+              {/* Pause + Stop row */}
+              <View style={styles.recControlRow}>
+                <TouchableOpacity style={styles.recControlBtn} onPress={pauseRecording}>
+                  <MaterialIcons name="pause" size={24} color="#fff" />
+                  <Text style={styles.recControlText}>Pause</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.recControlBtn, styles.recStopBtn]} onPress={stopRecording}>
+                  <MaterialIcons name="stop" size={24} color="#fff" />
+                  <Text style={styles.recControlText}>Stop</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+
+          {/* == PAUSED STATE == */}
+          {recordingMode === "paused" && (
+            <View style={styles.recordMicContainer}>
+              <View style={[styles.micCircle, styles.micCirclePaused]}>
+                <MaterialIcons name="pause" size={32} color="#fff" />
+              </View>
+              <Text style={[styles.recordingLabel, { color: "#f59e0b" }]}>
+                ⏸ Paused at {formatDuration(recordingDuration)}
+              </Text>
+
+              <View style={styles.recControlRow}>
+                <TouchableOpacity style={styles.recControlBtn} onPress={resumeRecording}>
+                  <MaterialIcons name="fiber-manual-record" size={20} color="#ec1313" />
+                  <Text style={styles.recControlText}>Resume</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.recControlBtn, styles.recStopBtn]} onPress={stopRecording}>
+                  <MaterialIcons name="stop" size={24} color="#fff" />
+                  <Text style={styles.recControlText}>Stop</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+
+          {/* == RECORDED STATE == */}
+          {recordingMode === "recorded" && (
+            <>
+              <TouchableOpacity style={styles.recordMicContainer} onPress={startRecording}>
+                <View style={[styles.micCircle, styles.micCircleRecorded]}>
+                  <MaterialIcons name="check" size={32} color="#fff" />
+                </View>
+                <Text style={styles.recordingLabel}>
+                  ✔ Saved ({formatDuration(recordingDuration)}) — Tap to Re-record
+                </Text>
+              </TouchableOpacity>
+
+              <View style={styles.recordActions}>
+                <TouchableOpacity style={styles.previewButton} onPress={previewRecording}>
+                  <MaterialIcons
+                    name={isPreviewing ? "stop" : "play-arrow"}
+                    size={22}
+                    color="#ec1313"
+                  />
+                  <Text style={styles.previewText}>
+                    {isPreviewing ? "Stop" : `Preview (${selectedGender === "male" ? "♂ Male" : "♀ Female"})`}
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={styles.clearButton} onPress={clearRecording}>
+                  <MaterialIcons name="delete-outline" size={20} color="#888" />
+                  <Text style={styles.clearText}>Clear</Text>
+                </TouchableOpacity>
+              </View>
+            </>
+          )}
+        </View>
       </ScrollView>
 
       {/* BOTTOM BUTTONS */}
       <View style={styles.bottomContainer}>
-
         {calling ? (
           <TouchableOpacity style={styles.cancelButton} onPress={cancelTimer}>
             <MaterialIcons name="cancel" size={22} color="#fff" />
@@ -195,24 +532,16 @@ export default function FakeCallSetup() {
           </TouchableOpacity>
         ) : (
           <View style={styles.buttonRow}>
-            <TouchableOpacity
-              style={styles.callNowButton}
-              onPress={triggerCall}
-            >
+            <TouchableOpacity style={styles.callNowButton} onPress={triggerCall}>
               <MaterialIcons name="call" size={20} color="#fff" />
               <Text style={styles.startText}>NOW</Text>
             </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.startButton}
-              onPress={startTimer}
-            >
+            <TouchableOpacity style={styles.startButton} onPress={startTimer}>
               <MaterialIcons name="timer" size={22} color="#fff" />
               <Text style={styles.startText}>START FAKE CALL</Text>
             </TouchableOpacity>
           </View>
         )}
-
       </View>
     </View>
   );
@@ -224,7 +553,6 @@ const styles = StyleSheet.create({
     backgroundColor: "#221610",
     paddingTop: 50,
   },
-
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -232,13 +560,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     marginBottom: 20,
   },
-
   headerTitle: {
     color: "#fff",
     fontSize: 18,
     fontWeight: "bold",
   },
-
   sectionTitle: {
     color: "#ec1313",
     fontSize: 12,
@@ -247,19 +573,16 @@ const styles = StyleSheet.create({
     marginTop: 20,
     marginBottom: 10,
   },
-
   callerItem: {
     alignItems: "center",
     marginHorizontal: 12,
   },
-
   avatarBorder: {
     borderWidth: 2,
     borderColor: "transparent",
     borderRadius: 40,
     padding: 2,
   },
-
   initialAvatar: {
     width: 70,
     height: 70,
@@ -268,24 +591,20 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
-
   initialText: {
     color: "#fff",
     fontSize: 26,
     fontWeight: "bold",
   },
-
   callerName: {
     color: "#fff",
     fontWeight: "bold",
     marginTop: 6,
   },
-
   callerSub: {
     color: "#777",
     fontSize: 10,
   },
-
   timerRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -293,7 +612,6 @@ const styles = StyleSheet.create({
     gap: 12,
     marginTop: 4,
   },
-
   timeInputBox: {
     backgroundColor: "#2d1f18",
     borderRadius: 12,
@@ -302,7 +620,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     width: 80,
   },
-
   timeInput: {
     color: "#fff",
     fontSize: 28,
@@ -310,20 +627,17 @@ const styles = StyleSheet.create({
     textAlign: "center",
     width: "100%",
   },
-
   timeLabel: {
     color: "#777",
     fontSize: 11,
     marginTop: 2,
     letterSpacing: 1,
   },
-
   timeSeparator: {
     color: "#ec1313",
     fontSize: 32,
     fontWeight: "bold",
   },
-
   countdownText: {
     color: "#ec1313",
     fontWeight: "bold",
@@ -332,7 +646,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     letterSpacing: 1,
   },
-
   voiceCard: {
     backgroundColor: "#2d1f18",
     padding: 14,
@@ -340,17 +653,14 @@ const styles = StyleSheet.create({
     marginHorizontal: 20,
     marginBottom: 10,
   },
-
   voiceSelected: {
     borderColor: "#ec1313",
     borderWidth: 1,
   },
-
   voiceText: {
     color: "#fff",
     fontSize: 13,
   },
-
   input: {
     backgroundColor: "#2d1f18",
     marginHorizontal: 20,
@@ -360,36 +670,172 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
 
-  recordButton: {
-    borderWidth: 1,
-    borderColor: "#ec1313",
-    borderStyle: "dashed",
-    marginHorizontal: 20,
-    marginTop: 15,
-    padding: 12,
-    borderRadius: 12,
+  // Gender pills – shared
+  genderRow: {
     flexDirection: "row",
+    marginHorizontal: 20,
+    gap: 12,
+  },
+  genderPill: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
     justifyContent: "center",
-    gap: 10,
+    gap: 8,
+    backgroundColor: "#2d1f18",
+    borderRadius: 12,
+    paddingVertical: 14,
+    borderWidth: 1.5,
+    borderColor: "transparent",
+  },
+  genderPillActive: {
+    borderColor: "#ec1313",
+    backgroundColor: "#3a1c14",
+  },
+  genderIcon: {
+    fontSize: 22,
+  },
+  genderLabel: {
+    color: "#888",
+    fontWeight: "bold",
+    fontSize: 15,
+  },
+  genderLabelActive: {
+    color: "#fff",
+  },
+  hintText: {
+    color: "#555",
+    fontSize: 11,
+    textAlign: "center",
+    marginHorizontal: 20,
+    marginTop: 8,
   },
 
-  recordText: {
+  // Recording section
+  recordSection: {
+    marginHorizontal: 20,
+    backgroundColor: "#2d1f18",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#3d2820",
+    overflow: "hidden",
+  },
+  recordMicContainer: {
+    alignItems: "center",
+    paddingVertical: 24,
+    gap: 12,
+  },
+
+  // Pulse animation
+  pulseWrapper: {
+    width: 100,
+    height: 100,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  pulseRing: {
+    position: "absolute",
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: "rgba(236, 19, 19, 0.25)",
+  },
+
+  micCircle: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: "#ec1313",
+    justifyContent: "center",
+    alignItems: "center",
+    elevation: 6,
+  },
+  micCircleRecording: {
+    backgroundColor: "#c00",
+  },
+  micCirclePaused: {
+    backgroundColor: "#f59e0b",
+  },
+  micCircleRecorded: {
+    backgroundColor: "#22c55e",
+  },
+  recordingLabel: {
+    color: "#ccc",
+    fontSize: 12,
+    letterSpacing: 0.5,
+    textAlign: "center",
+  },
+
+  // Recording control buttons (pause/stop/resume)
+  recControlRow: {
+    flexDirection: "row",
+    gap: 16,
+    marginTop: 8,
+  },
+  recControlBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 20,
+  },
+  recStopBtn: {
+    backgroundColor: "rgba(236,19,19,0.2)",
+  },
+  recControlText: {
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+
+  // Preview/Clear buttons
+  recordActions: {
+    flexDirection: "row",
+    borderTopWidth: 1,
+    borderTopColor: "#3d2820",
+  },
+  previewButton: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 14,
+    borderRightWidth: 1,
+    borderRightColor: "#3d2820",
+  },
+  previewText: {
     color: "#ec1313",
     fontWeight: "bold",
+    fontSize: 13,
+  },
+  clearButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+  },
+  clearText: {
+    color: "#888",
+    fontWeight: "bold",
+    fontSize: 13,
   },
 
+  // Bottom
   bottomContainer: {
     position: "absolute",
     bottom: 20,
     left: 20,
     right: 20,
   },
-
   buttonRow: {
     flexDirection: "row",
     gap: 10,
   },
-
   callNowButton: {
     backgroundColor: "#333",
     padding: 18,
@@ -400,7 +846,6 @@ const styles = StyleSheet.create({
     gap: 8,
     width: 90,
   },
-
   cancelButton: {
     backgroundColor: "#555",
     padding: 18,
@@ -410,7 +855,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 10,
   },
-
   startButton: {
     flex: 1,
     backgroundColor: "#ec1313",
@@ -421,7 +865,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 10,
   },
-
   startText: {
     color: "#fff",
     fontWeight: "bold",

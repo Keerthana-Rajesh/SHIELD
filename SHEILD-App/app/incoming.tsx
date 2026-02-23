@@ -11,7 +11,7 @@ import { useLocalSearchParams } from "expo-router";
 
 export default function IncomingCall() {
   const router = useRouter();
-  const { name } = useLocalSearchParams();
+  const { name, recordingUri, gender } = useLocalSearchParams();
 
   // Optional: Auto vibrate / ringtone logic can go here
 
@@ -79,7 +79,7 @@ export default function IncomingCall() {
         <View style={{ alignItems: "center" }}>
           <TouchableOpacity
             style={styles.acceptButton}
-            onPress={() => router.replace({ pathname: "/active-call", params: { name } })}
+            onPress={() => router.replace({ pathname: "/active-call", params: { name, recordingUri, gender } })}
           >
             <MaterialIcons name="call" size={36} color="#fff" />
           </TouchableOpacity>
