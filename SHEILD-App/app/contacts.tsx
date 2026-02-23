@@ -26,7 +26,7 @@ export default function Contacts() {
           if (!email) return;
 
           const response = await fetch(
-            `http://10.200.110.103:5000/contacts/${email}`
+            `http://192.168.220.8:5000/contacts/${email}`
           );
 
           const data = await response.json();

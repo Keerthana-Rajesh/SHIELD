@@ -10,14 +10,12 @@ import { MaterialIcons } from "@expo/vector-icons";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "expo-router";
 import { useLocalSearchParams } from "expo-router";
-import { Image } from "react-native";
 
 export default function ActiveCall() {
   const router = useRouter();
   const [seconds, setSeconds] = useState(5);
   const params = useLocalSearchParams();
-const callerName = (params.name as string) || "Unknown";
-const callerImage = params.image as string | undefined;
+  const callerName = (params.name as string) || "Unknown";
 
   // ⏱ Call Timer
   useEffect(() => {
@@ -39,26 +37,20 @@ const callerImage = params.image as string | undefined;
   return (
     <View style={styles.container}>
 
-  {/* HEADER INFO */}
-  <View style={styles.header}>
+      {/* HEADER INFO */}
+      <View style={styles.header}>
 
-    <View style={styles.avatar}>
-      {callerImage ? (
-        <Image source={{ uri: callerImage }} style={styles.avatarImage} />
-      ) : callerName ? (
-        <Text style={styles.initialText}>
-          {callerName.charAt(0).toUpperCase()}
-        </Text>
-      ) : (
-        <MaterialIcons name="person" size={50} color="#666" />
-      )}
-    </View>
+        <View style={styles.avatar}>
+          <Text style={styles.initialText}>
+            {callerName.charAt(0).toUpperCase()}
+          </Text>
+        </View>
 
-    <Text style={styles.name}>{callerName}</Text>
-    <Text style={styles.label}>Mobile</Text>
-    <Text style={styles.timer}>{formatTime()}</Text>
+        <Text style={styles.name}>{callerName}</Text>
+        <Text style={styles.label}>Mobile</Text>
+        <Text style={styles.timer}>{formatTime()}</Text>
 
-  </View>
+      </View>
       {/* WAVEFORM */}
       <View style={styles.waveContainer}>
         {[...Array(10)].map((_, i) => (
@@ -159,12 +151,10 @@ const styles = StyleSheet.create({
     width: 100,
     height: 100,
     borderRadius: 50,
-    backgroundColor: "#111",
+    backgroundColor: "#ec1313",
     justifyContent: "center",
     alignItems: "center",
     marginBottom: 20,
-    borderWidth: 1,
-    borderColor: "#222",
   },
 
   name: {
@@ -236,13 +226,8 @@ const styles = StyleSheet.create({
     elevation: 10,
   },
   initialText: {
-  color: "#fff",
-  fontSize: 40,
-  fontWeight: "bold",
-},
-avatarImage: {
-  width: 100,
-  height: 100,
-  borderRadius: 50,
-},
+    color: "#fff",
+    fontSize: 40,
+    fontWeight: "bold",
+  },
 });

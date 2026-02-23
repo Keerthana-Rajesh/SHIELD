@@ -2,13 +2,11 @@ import {
   View,
   Text,
   StyleSheet,
-  Image,
   TouchableOpacity,
   StatusBar,
 } from "react-native";
 import { MaterialIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { useEffect } from "react";
 import { useLocalSearchParams } from "expo-router";
 
 export default function IncomingCall() {
@@ -35,10 +33,9 @@ export default function IncomingCall() {
       {/* Caller Info */}
       <View style={styles.callerContainer}>
         <View style={styles.avatarWrapper}>
-          <Image
-            source={{ uri: "https://i.pravatar.cc/300?img=47" }}
-            style={styles.avatar}
-          />
+          <Text style={styles.initialText}>
+            {name ? (name as string).charAt(0).toUpperCase() : "?"}
+          </Text>
         </View>
 
         <Text style={styles.name}>{name}</Text>
@@ -59,37 +56,37 @@ export default function IncomingCall() {
           <Text style={styles.utilityText}>Message</Text>
         </View>
       </View>
-{/* Accept / Decline Buttons */}
-<View style={styles.actionRow}>
+      {/* Accept / Decline Buttons */}
+      <View style={styles.actionRow}>
 
-  {/* Decline */}
-  <View style={{ alignItems: "center" }}>
-    <TouchableOpacity
-      style={styles.declineButton}
-      onPress={() => router.replace("/fake-call")}
-    >
-      <MaterialIcons
-        name="call"
-        size={36}
-        color="#fff"
-        style={{ transform: [{ rotate: "135deg" }] }}
-      />
-    </TouchableOpacity>
-    <Text style={styles.actionLabel}>DECLINE</Text>
-  </View>
+        {/* Decline */}
+        <View style={{ alignItems: "center" }}>
+          <TouchableOpacity
+            style={styles.declineButton}
+            onPress={() => router.replace("/fake-call")}
+          >
+            <MaterialIcons
+              name="call"
+              size={36}
+              color="#fff"
+              style={{ transform: [{ rotate: "135deg" }] }}
+            />
+          </TouchableOpacity>
+          <Text style={styles.actionLabel}>DECLINE</Text>
+        </View>
 
-  {/* Accept */}
-  <View style={{ alignItems: "center" }}>
-    <TouchableOpacity
-      style={styles.acceptButton}
-      onPress={() => router.replace("/active-call")}
-    >
-      <MaterialIcons name="call" size={36} color="#fff" />
-    </TouchableOpacity>
-    <Text style={styles.actionLabel}>ACCEPT</Text>
-  </View>
+        {/* Accept */}
+        <View style={{ alignItems: "center" }}>
+          <TouchableOpacity
+            style={styles.acceptButton}
+            onPress={() => router.replace({ pathname: "/active-call", params: { name } })}
+          >
+            <MaterialIcons name="call" size={36} color="#fff" />
+          </TouchableOpacity>
+          <Text style={styles.actionLabel}>ACCEPT</Text>
+        </View>
 
-</View>
+      </View>
 
       {/* Android Bottom Line */}
       <View style={styles.bottomBar} />
@@ -123,19 +120,19 @@ const styles = StyleSheet.create({
   },
 
   avatarWrapper: {
-    width: 160,
-    height: 160,
-    borderRadius: 80,
-    overflow: "hidden",
-    borderWidth: 2,
-    borderColor: "#111",
-    backgroundColor: "#111",
+    width: 140,
+    height: 140,
+    borderRadius: 70,
+    backgroundColor: "#ec1313",
     marginBottom: 30,
+    justifyContent: "center",
+    alignItems: "center",
   },
 
-  avatar: {
-    width: "100%",
-    height: "100%",
+  initialText: {
+    color: "#fff",
+    fontSize: 64,
+    fontWeight: "bold",
   },
 
   name: {
