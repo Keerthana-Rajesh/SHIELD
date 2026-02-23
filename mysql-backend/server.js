@@ -227,25 +227,36 @@ app.put("/update-user/:email", (req, res) => {
 /* ================================
    🔹 ADD CONTACT
 ================================ */
-app.post("/add-contact", (req, res) => {
+app.post("/add-contact", async (req, res) => {
   const { email, name, relation, phone, location, notes, gender } = req.body;
 
-  if (!email || !name || !phone) {
-    return res.status(400).json({ success: false, message: "Missing required fields" });
-  }
+  try {
+    // 1️⃣ Get user id from email
+    const [userRows] = await db.promise().query(
+      "SELECT id FROM users WHERE email = ?",
+      [email]
+    );
 
-  const sql = `
-    INSERT INTO contacts (user_email, name, relation, phone, location, notes, gender)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `;
-
-  db.query(sql, [email, name, relation, phone, location, notes, gender], (err) => {
-    if (err) {
-      console.log(err);
-      return res.status(500).json({ success: false, message: "Database error" });
+    if (userRows.length === 0) {
+      return res.status(404).json({ message: "User not found" });
     }
-    res.json({ success: true, message: "Contact added successfully" });
-  });
+
+    const userId = userRows[0].id;
+
+    // 2️⃣ Insert contact using user_id
+    await db.promise().query(
+      `INSERT INTO contacts 
+       (user_id, name, relation, phone, location, notes, gender)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [userId, name, relation, phone, location, notes, gender]
+    );
+
+    res.json({ message: "Contact added successfully" });
+
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ message: "Server error" });
+  }
 });
 
 /* ================================
@@ -276,15 +287,25 @@ app.post("/update-contact", (req, res) => {
 /* ================================
    🔹 GET CONTACTS BY USER EMAIL
 ================================ */
-app.get("/contacts/:email", (req, res) => {
+app.get("/contacts/:email", async (req, res) => {
   const { email } = req.params;
 
-  db.query("SELECT * FROM contacts WHERE user_email = ?", [email], (err, results) => {
-    if (err) return res.status(500).json({ success: false });
-    res.json(results);
-  });
-});
+  try {
+    const [rows] = await db.promise().query(
+      `SELECT contacts.*
+       FROM contacts
+       JOIN users ON contacts.user_id = users.id
+       WHERE users.email = ?`,
+      [email]
+    );
 
+    res.json({ contacts: rows });
+
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
 /* ================================
    🔹 DELETE CONTACT
 ================================ */
@@ -295,6 +316,27 @@ app.delete("/delete-contact/:id", (req, res) => {
     if (err) return res.status(500).json({ success: false });
     res.json({ success: true, message: "Contact deleted" });
   });
+});
+
+
+app.put("/update-contact/:id", async (req, res) => {
+  const { id } = req.params;
+  const { name, relation, phone, location, notes, gender } = req.body;
+
+  try {
+    await db.promise().query(
+      `UPDATE contacts
+       SET name = ?, relation = ?, phone = ?, location = ?, notes = ?, gender = ?
+       WHERE id = ?`,
+      [name, relation, phone, location, notes, gender, id]
+    );
+
+    res.json({ message: "Contact updated successfully" });
+
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ message: "Server error" });
+  }
 });
 
 /* ================================

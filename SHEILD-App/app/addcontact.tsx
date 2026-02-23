@@ -24,6 +24,11 @@ export default function AddContact() {
   const [notes, setNotes] = useState("");
   const [gender, setGender] = useState<"male" | "female" | null>(null);
   const params = useLocalSearchParams();
+  const contactData = params.contact
+  ? JSON.parse(params.contact as string)
+  : null;
+
+const contactId = contactData ? contactData.id : null;
 
 useEffect(() => {
   if (params.contact) {
@@ -47,30 +52,38 @@ useEffect(() => {
 
     const email = await AsyncStorage.getItem("userEmail");
 
-    const url = params.contact
-      ? "http://10.200.110.103:5000/update-contact"
-      : "http://10.200.110.103:5000/add-contact";
+    let url = "";
+    let method = "POST";
 
-    const bodyData = {
-  email,
-  name,
-  relation,
-  phone,
-  location,
-  notes,
-  gender,
-  id: params.contact
-    ? JSON.parse(params.contact as string).id
-    : null,
-};
+    if (params.contact) {
+      const contact = JSON.parse(params.contact as string);
+
+      url = `http://10.200.110.103:5000/update-contact/${contact.id}`;
+      method = "PUT";
+    } else {
+      url = "http://10.200.110.103:5000/add-contact";
+      method = "POST";
+    }
 
     const response = await fetch(url, {
-      method: "POST",
+      method,
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(bodyData),
+      body: JSON.stringify({
+        email,
+        name,
+        relation,
+        phone,
+        location,
+        notes,
+        gender,
+      }),
     });
+    if (contactId) {
+  url = `http://10.200.110.103:5000/update-contact/${contactId}`;
+  method = "PUT";
+}
 
     const data = await response.json();
 
@@ -82,9 +95,40 @@ useEffect(() => {
     alert(params.contact ? "Contact updated" : "Contact added");
 
     router.back();
+
   } catch (error) {
     console.log(error);
     alert("Server error");
+  }
+};
+
+const handleUpdate = async () => {
+  try {
+    const response = await fetch(
+      `http://10.200.110.103:5000/update-contact/${contactId}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          relation,
+          phone,
+          location,
+          notes,
+          gender,
+        }),
+      }
+    );
+
+    if (response.ok) {
+      alert("Contact updated!");
+      router.back();
+    } else {
+      alert("Update failed");
+    }
+
+  } catch (error) {
+    console.log(error);
   }
 };
 

@@ -38,7 +38,7 @@ export default function Profile() {
 
         try {
           const response = await fetch(
-            `http://192.168.220.8:5000/user/${storedEmail}`
+            `http://10.200.110.103:5000/user/${storedEmail}`
           );
 
           if (!response.ok) return;

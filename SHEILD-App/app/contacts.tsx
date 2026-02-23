@@ -13,33 +13,64 @@ import { useFocusEffect } from "@react-navigation/native";
 import { useCallback } from "react";
 
 export default function Contacts() {
-  const router = useRouter();
-  const [contacts, setContacts] = useState<any[]>([]);
+  const router = useRouter();const [contacts, setContacts] = useState<any[]>([]);
+const [loading, setLoading] = useState(false);
 
-  // 🔥 Fetch contacts every time screen focuses
-  useFocusEffect(
-    useCallback(() => {
-      const loadContacts = async () => {
-        try {
-          const email = await AsyncStorage.getItem("userEmail");
+useFocusEffect(
+  useCallback(() => {
+    let isActive = true;
 
-          if (!email) return;
+    const loadContacts = async () => {
+      try {
+        setLoading(true);
 
-          const response = await fetch(
-            `http://10.200.110.103:5000/contacts/${email}`
-          );
+        const email = await AsyncStorage.getItem("userEmail");
 
-          const data = await response.json();
-
-          setContacts(data);
-        } catch (error) {
-          console.log("Error loading contacts:", error);
+        if (!email) {
+          if (isActive) setContacts([]);
+          return;
         }
-      };
 
-      loadContacts();
-    }, [])
-  );
+        const response = await fetch(
+          `http://10.200.110.103:5000/contacts/${email}`
+        );
+
+        if (!response.ok) {
+          console.log("Server error:", response.status);
+          if (isActive) setContacts([]);
+          return;
+        }
+
+        const data = await response.json();
+        console.log("Contacts API response:", data);
+
+        if (!isActive) return;
+
+        // 🔥 SAFELY HANDLE ANY RESPONSE FORMAT
+        if (Array.isArray(data)) {
+          setContacts(data);
+        } else if (Array.isArray(data.contacts)) {
+          setContacts(data.contacts);
+        } else {
+          setContacts([]);
+        }
+
+      } catch (error) {
+        console.log("Error loading contacts:", error);
+        if (isActive) setContacts([]);
+      } finally {
+        if (isActive) setLoading(false);
+      }
+    };
+
+    loadContacts();
+
+    return () => {
+      isActive = false;
+    };
+  }, [])
+);
+
 
   return (
     <View style={styles.container}>
