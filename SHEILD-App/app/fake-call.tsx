@@ -15,6 +15,7 @@ import { useRouter } from "expo-router";
 import { Audio } from "expo-av";
 import * as FileSystem from "expo-file-system/legacy";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import Slider from "@react-native-community/slider";
 
 type RecordingMode = "idle" | "recording" | "paused" | "recorded";
 type Gender = "male" | "female";
@@ -37,6 +38,7 @@ export default function FakeCallSetup() {
   const [recordingUri, setRecordingUri] = useState<string | null>(null);
   const [recordingDuration, setRecordingDuration] = useState(0);
   const [isPreviewing, setIsPreviewing] = useState(false);
+  const [selectedVoiceId, setSelectedVoiceId] = useState<number | null>(null);
 
   const [recording, setRecording] =
     useState<Audio.Recording | null>(null);
@@ -50,7 +52,14 @@ export default function FakeCallSetup() {
 
   const pulseAnim = useRef(new Animated.Value(0.4)).current;
   const pulseOpacity = useRef(new Animated.Value(0)).current;
-  const [savedVoices, setSavedVoices] = useState<any[]>([]);
+  const [savedVoices, setSavedVoices] = useState<SavedVoice[]>([]);
+
+  const [currentSound, setCurrentSound] = useState<Audio.Sound | null>(null);
+const [isPlaying, setIsPlaying] = useState(false);
+const [currentlyPlayingId, setCurrentlyPlayingId] = useState<number | null>(null);
+
+const [position, setPosition] = useState(0);
+const [duration, setDuration] = useState(1);
 
   // -----------------------------
   // Callers & Voices
@@ -61,6 +70,10 @@ export default function FakeCallSetup() {
     { name: "Boyfriend" },
     { name: "Best Friend" },
   ];
+  const directory = FileSystem.documentDirectory;
+if (!directory) return;
+
+const newPath: string = directory + `voice-${Date.now()}.m4a`;
 
   // ===============================
 // 🗣 PRESET VOICES
@@ -71,18 +84,32 @@ const voices = [
   "Hey, are you almost home?",
   "I'm waiting at the corner.",
 ];
+type SavedVoice = {
+  id: number;
+  name: string;
+  uri: string;
+  isSelected: boolean;
+};
+
+const newVoice = {
+  id: Date.now(),
+  name: `Recorded Voice ${savedVoices.length + 1}`,
+  uri: newPath as string,
+  isSelected: false,
+};
 
   // -----------------------------
   // Permission
   // -----------------------------
 
-  useEffect(() => {
+ useEffect(() => {
   const loadVoices = async () => {
     const data = await AsyncStorage.getItem("RECORDED_VOICES");
     if (data) {
       setSavedVoices(JSON.parse(data));
     }
   };
+
   loadVoices();
 }, []);
 
@@ -126,6 +153,23 @@ const voices = [
     const ss = (s % 60).toString().padStart(2, "0");
     return `${m}:${ss}`;
   };
+
+
+  const selectVoice = async (id: number) => {
+  setSelectedVoiceId(id);
+
+  const updated = savedVoices.map(v => ({
+    ...v,
+    isSelected: v.id === id,
+  }));
+
+  setSavedVoices(updated);
+
+  await AsyncStorage.setItem(
+    "RECORDED_VOICES",
+    JSON.stringify(updated)
+  );
+};
 
   // -----------------------------
   // Recording Functions
@@ -181,14 +225,31 @@ const voices = [
 
     const newPath =
       FileSystem.documentDirectory +
-      `recorded-voice-${Date.now()}.m4a`;
+      `voice-${Date.now()}.m4a`;
 
     await FileSystem.copyAsync({
       from: tempUri,
       to: newPath,
     });
 
-    console.log("Saved permanently:", newPath);
+    // 🔥 Create Voice Object
+    const newVoice: SavedVoice = {
+  id: Date.now(),
+  name: `Recorded Voice ${savedVoices.length + 1}`,
+  uri: newPath,
+  isSelected: false,
+};
+
+// ✅ CREATE updatedVoices HERE
+const updatedVoices = [...savedVoices, newVoice];
+
+// ✅ USE IT AFTER DEFINING
+setSavedVoices(updatedVoices);
+
+await AsyncStorage.setItem(
+  "RECORDED_VOICES",
+  JSON.stringify(updatedVoices)
+);
 
     setRecordingUri(newPath);
     setRecording(null);
@@ -246,6 +307,92 @@ const voices = [
   }
 };
 
+const previewSavedVoice = async (uri: string) => {
+  try {
+    if (currentSound) {
+      await currentSound.unloadAsync();
+      setCurrentSound(null);
+      setIsPlaying(false);
+    }
+
+    await Audio.setAudioModeAsync({
+      allowsRecordingIOS: false,
+      playsInSilentModeIOS: true,
+      playThroughEarpieceAndroid: false,
+    });
+
+    const { sound } = await Audio.Sound.createAsync(
+      { uri },
+      { shouldPlay: true }
+    );
+
+    setCurrentSound(sound);
+    setIsPlaying(true);
+
+    sound.setOnPlaybackStatusUpdate((status: any) => {
+      if (status.isLoaded) {
+        setPosition(status.positionMillis);
+        setDuration(status.durationMillis || 1);
+        setIsPlaying(status.isPlaying);
+      }
+    });
+
+  } catch (error) {
+    console.log("Preview error:", error);
+  }
+};
+
+const togglePlayPause = async (id: number, uri: string) => {
+  try {
+    // If tapping same audio
+    if (currentlyPlayingId === id && currentSound) {
+      if (isPlaying) {
+        await currentSound.pauseAsync();
+        setIsPlaying(false);
+      } else {
+        await currentSound.playAsync();
+        setIsPlaying(true);
+      }
+      return;
+    }
+
+    // If different audio selected
+    if (currentSound) {
+      await currentSound.unloadAsync();
+      setCurrentSound(null);
+    }
+
+    const { sound } = await Audio.Sound.createAsync(
+      { uri },
+      { shouldPlay: true }
+    );
+
+    setCurrentSound(sound);
+    setCurrentlyPlayingId(id);
+    setIsPlaying(true);
+
+    sound.setOnPlaybackStatusUpdate((status: any) => {
+      if (status.isLoaded) {
+        setPosition(status.positionMillis);
+        setDuration(status.durationMillis || 1);
+        setIsPlaying(status.isPlaying);
+
+        if (status.didJustFinish) {
+          setCurrentlyPlayingId(null);
+        }
+      }
+    });
+
+  } catch (error) {
+    console.log("Toggle error:", error);
+  }
+};
+
+const seekAudio = async (value: number) => {
+  if (!currentSound) return;
+  await currentSound.setPositionAsync(value);
+};
+
   const clearRecording = async () => {
     if (previewSoundRef.current) {
       await previewSoundRef.current.unloadAsync();
@@ -256,28 +403,56 @@ const voices = [
     setRecordingDuration(0);
   };
 
-  const deleteVoice = async (uri: string) => {
+  const deleteVoice = async (id: number, uri: string) => {
   try {
     await FileSystem.deleteAsync(uri, { idempotent: true });
-    console.log("Deleted:", uri);
+
+    const updated = savedVoices.filter(v => v.id !== id);
+    setSavedVoices(updated);
+
+    await AsyncStorage.setItem(
+      "RECORDED_VOICES",
+      JSON.stringify(updated)
+    );
+
   } catch (error) {
     console.log("Delete error:", error);
   }
+};
+
+const renameVoice = async (id: number, newName: string) => {
+  const updated = savedVoices.map(v =>
+    v.id === id ? { ...v, name: newName } : v
+  );
+
+  setSavedVoices(updated);
+
+  await AsyncStorage.setItem(
+    "RECORDED_VOICES",
+    JSON.stringify(updated)
+  );
 };
 
   // -----------------------------
   // Call Trigger
   // -----------------------------
   const triggerCall = () => {
-    router.push({
-      pathname: "/incoming",
-      params: {
-        name: selectedCaller,
-        recordingUri: recordingUri ?? "",
-        gender: selectedGender,
-      },
-    });
-  };
+  const selectedVoice = savedVoices.find(v => v.isSelected);
+
+  if (!selectedVoice) {
+    Alert.alert("Select a recorded voice first");
+    return;
+  }
+
+  router.push({
+    pathname: "/active-call",
+    params: {
+      name: selectedCaller,
+      recordingUri: selectedVoice.uri,
+      gender: selectedGender,
+    },
+  });
+};
 
   // -----------------------------
   // Timer Logic
@@ -440,6 +615,97 @@ const voices = [
 
         {/* RECORD YOUR VOICE */}
         <Text style={styles.sectionTitle}>RECORD YOUR VOICE</Text>
+
+        {savedVoices.map((voice) => (
+  <View
+    key={voice.id}
+    style={[
+      styles.savedVoiceCard,
+      voice.isSelected && { borderColor: "#22c55e", borderWidth: 2 }
+    ]}
+  >
+    <Text style={{ color: "#fff", marginBottom: 8 }}>
+      {voice.name}
+    </Text>
+
+    {/* Controls Row */}
+    <View style={{ flexDirection: "row", gap: 12, alignItems: "center" }}>
+      
+      {/* Play / Pause */}
+      <TouchableOpacity
+  onPress={() => togglePlayPause(voice.id, voice.uri)}
+>
+  <MaterialIcons
+    name={
+      currentlyPlayingId === voice.id && isPlaying
+        ? "pause"
+        : "play-arrow"
+    }
+    size={22}
+    color="#22c55e"
+  />
+</TouchableOpacity>
+
+      {/* Select */}
+      <TouchableOpacity
+        onPress={() => selectVoice(voice.id)}
+      >
+        <MaterialIcons name="check-circle" size={22} color="#3b82f6" />
+      </TouchableOpacity>
+
+      {/* Delete */}
+      <TouchableOpacity
+        onPress={() => deleteVoice(voice.id, voice.uri)}
+      >
+        <MaterialIcons name="delete" size={22} color="#ec1313" />
+      </TouchableOpacity>
+      {/* Select For Call */}
+<TouchableOpacity
+  onPress={() => selectVoice(voice.id)}
+>
+  <MaterialIcons
+    name={
+      selectedVoiceId === voice.id
+        ? "radio-button-checked"
+        : "radio-button-unchecked"
+    }
+    size={22}
+    color="#3b82f6"
+  />
+</TouchableOpacity>
+
+    </View>
+
+    {/* Show Slider ONLY if this voice is currently playing */}
+    {currentlyPlayingId === voice.id && (
+  <View style={{ marginTop: 10 }}>
+    <Slider
+      minimumValue={0}
+      maximumValue={duration}
+      value={position}
+      onSlidingComplete={seekAudio}
+      minimumTrackTintColor="#ec1313"
+      maximumTrackTintColor="#555"
+      thumbTintColor="#ec1313"
+    />
+
+    <View style={{
+      flexDirection: "row",
+      justifyContent: "space-between"
+    }}>
+      <Text style={{ color: "#888", fontSize: 12 }}>
+        {Math.floor(position / 1000)}s
+      </Text>
+
+      <Text style={{ color: "#888", fontSize: 12 }}>
+        {Math.floor(duration / 1000)}s
+      </Text>
+    </View>
+  </View>
+)}
+
+  </View>
+))}
 
         <View style={styles.recordSection}>
           {/* == IDLE STATE == */}
@@ -893,4 +1159,14 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     fontSize: 14,
   },
+  savedVoiceCard: {
+  backgroundColor: "#2d1f18",
+  padding: 14,
+  marginHorizontal: 20,
+  marginTop: 10,
+  borderRadius: 12,
+  flexDirection: "row",
+  justifyContent: "space-between",
+  alignItems: "center",
+},
 });
