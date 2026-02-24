@@ -22,7 +22,11 @@ export default function Settings() {
     const [loopAudio, setLoopAudio] = useState(false);
     const [pinEnabled, setPinEnabled] = useState(true);
     const [stealthMode, setStealthMode] = useState(false);
+    const [keywords, setKeywords] = useState("");
     const router = useRouter();
+    const processedKeywords = keywords
+        .split(",")
+        .map(word => word.trim().toLowerCase());
 
 
     return (
@@ -42,39 +46,42 @@ export default function Settings() {
                     <MaterialIcons name="help-outline" size={22} color="#AAA" />
                 </View>
 
-                {/* PROFILE SETUP */}
-                <Section title="PROFILE SETUP">
-                    <View style={styles.card}>
-                        <View style={styles.avatar}>
-                            <Text style={{ color: "#EC1313", fontWeight: "bold" }}>JD</Text>
-                        </View>
-
-                        <TextInput
-                            placeholder="Full Name"
-                            placeholderTextColor="#777"
-                            style={styles.input}
-                        />
-
-                        <TextInput
-                            placeholder="Emergency Contact"
-                            placeholderTextColor="#777"
-                            style={styles.input}
-                        />
-
-                        <TouchableOpacity style={styles.primaryBtn}>
-                            <Text style={styles.primaryText}>SAVE CHANGES</Text>
-                        </TouchableOpacity>
-                    </View>
-                </Section>
-
                 {/* KEYWORD SETUP */}
                 <Section title="KEYWORD SETUP">
+
                     <Row
                         icon="keyboard-voice"
-                        label="Keyword Detection"
+                        label="Enable Keyword Detection"
                         value={keywordEnabled}
                         onValueChange={setKeywordEnabled}
                     />
+
+                    {keywordEnabled && (
+                        <>
+                            <Text style={{ color: "#AAA", fontSize: 12 }}>
+                                Enter emergency keywords (comma separated)
+                            </Text>
+
+                            <TextInput
+                                placeholder="help, save me, emergency"
+                                placeholderTextColor="#777"
+                                style={styles.input}
+                                value={keywords}
+                                onChangeText={setKeywords}
+                            />
+
+                            <TouchableOpacity
+                                style={styles.primaryBtn}
+                                onPress={() => {
+                                    console.log("Saved Keywords:", keywords);
+                                    alert("Keywords Saved Successfully");
+                                }}
+                            >
+                                <Text style={styles.primaryText}>SAVE KEYWORDS</Text>
+                            </TouchableOpacity>
+                        </>
+                    )}
+
                 </Section>
 
                 {/* HARDWARE SETUP */}
@@ -142,12 +149,6 @@ export default function Settings() {
                         onValueChange={setStealthMode}
                     />
                 </Section>
-
-                {/* RESET */}
-                <TouchableOpacity style={styles.resetBtn}>
-                    <MaterialIcons name="delete-forever" size={20} color="#EC1313" />
-                    <Text style={styles.resetText}>RESET ALL DATA</Text>
-                </TouchableOpacity>
 
                 <Text style={styles.footer}>
                     Stay Protected • SHIELD Safety App
@@ -224,7 +225,6 @@ const NavItem = ({ icon, label, active, onPress }: any) => (
         </Text>
     </TouchableOpacity>
 );
-
 /* ---------- STYLES ---------- */
 
 const styles = StyleSheet.create({
