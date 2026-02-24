@@ -155,7 +155,7 @@ export default function Contacts() {
         <NavItem icon="home" label="Home" onPress={() => router.push("/dashboard")} />
         <NavItem icon="group" label="Contacts" active />
         <NavItem icon="explore" label="Safe Map" onPress={() => router.push("/safemap")} />
-        <NavItem icon="person" label="Profile" onPress={() => router.push("/profile")} />
+        <NavItem icon="settings" label="Settings" onPress={() => router.push("/settings")} />
       </View>
     </View>
   );

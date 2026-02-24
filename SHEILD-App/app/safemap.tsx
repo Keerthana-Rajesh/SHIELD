@@ -14,7 +14,7 @@ export default function SafeMap() {
   return (
     <View style={styles.container}>
       <ScrollView contentContainerStyle={{ paddingBottom: 140 }}>
-        
+
         {/* Top App Bar */}
         <View style={styles.header}>
           <MaterialIcons name="explore" size={26} color="#ec1313" />
@@ -70,9 +70,9 @@ export default function SafeMap() {
           active
         />
         <NavItem
-          icon="person"
-          label="Profile"
-          onPress={() => router.push("/profile")}
+          icon="settings"
+          label="Settings"
+          onPress={() => router.push("/settings")}
         />
       </View>
     </View>

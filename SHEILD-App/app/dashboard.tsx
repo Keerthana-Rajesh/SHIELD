@@ -9,10 +9,11 @@ import {
 import { MaterialIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 export default function Dashboard() {
   const router = useRouter();
+  const [menuVisible, setMenuVisible] = useState(false);
 
   // 🔐 Protect Dashboard (redirect if not logged in)
   useEffect(() => {
@@ -96,18 +97,48 @@ export default function Dashboard() {
           SHIELD
         </Text>
 
-        <TouchableOpacity
-          onPress={handleLogout}
-          style={{
-            padding: 10,
-            borderRadius: 50,
-            backgroundColor: "#2a1b1b",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          <MaterialIcons name="logout" size={26} color="#ec1313" />
-        </TouchableOpacity>
+        <View style={{ position: "relative" }}>
+          <TouchableOpacity
+            onPress={() => setMenuVisible(!menuVisible)}
+            style={{
+              padding: 10,
+              borderRadius: 50,
+              backgroundColor: "#2a1b1b",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <MaterialIcons name="more-vert" size={26} color="#ec1313" />
+          </TouchableOpacity>
+        </View>
+
+        {menuVisible && (
+          <View style={styles.dropdownMenu}>
+            <TouchableOpacity
+              style={styles.dropdownItem}
+              onPress={() => {
+                setMenuVisible(false);
+                router.push("/profile");
+              }}
+            >
+              <MaterialIcons name="person" size={18} color="#fff" />
+              <Text style={styles.dropdownText}>Profile</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.dropdownItem}
+              onPress={() => {
+                setMenuVisible(false);
+                handleLogout();
+              }}
+            >
+              <MaterialIcons name="logout" size={18} color="#ff4444" />
+              <Text style={[styles.dropdownText, { color: "#ff4444" }]}>
+                Logout
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </View>
 
       {/* 🔥 SCROLLABLE CONTENT */}
@@ -194,15 +225,14 @@ export default function Dashboard() {
           onPress={() => router.push("/safemap")}
         />
         <NavItem
-          icon="person"
-          label="Profile"
-          onPress={() => router.push("/profile")}
+          icon="settings"
+          label="Settings"
+          onPress={() => router.push("/settings")}
         />
       </View>
 
     </View>
   );
-
 }
 
 /* ---------------- COMPONENTS ---------------- */
@@ -497,5 +527,29 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: "#ddd",
     textAlign: "center",
+  },
+  dropdownMenu: {
+    position: "absolute",
+    top: 50,
+    right: 0,
+    backgroundColor: "#2a1b1b",
+    borderRadius: 12,
+    paddingVertical: 10,
+    width: 160,
+    elevation: 10,
+    zIndex: 100,
+  },
+
+  dropdownItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 15,
+    paddingVertical: 10,
+  },
+
+  dropdownText: {
+    color: "#fff",
+    fontSize: 14,
   },
 });
