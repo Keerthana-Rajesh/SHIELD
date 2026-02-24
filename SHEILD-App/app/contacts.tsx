@@ -11,11 +11,12 @@ import { useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect } from "@react-navigation/native";
 import { useCallback } from "react";
+import { Alert } from "react-native";
 
 export default function Contacts() {
-  const router = useRouter();const [contacts, setContacts] = useState<any[]>([]);
+  const router = useRouter();
+  const [contacts, setContacts] = useState<any[]>([]);
 const [loading, setLoading] = useState(false);
-
 useFocusEffect(
   useCallback(() => {
     let isActive = true;
@@ -72,6 +73,28 @@ useFocusEffect(
 );
 
 
+const handleDelete = async (id: number) => {
+  try {
+    const response = await fetch(
+      `http://10.200.110.103:5000/delete-contact/${id}`,
+      {
+        method: "DELETE",
+      }
+    );
+
+    if (response.ok) {
+      setContacts((prev) => prev.filter((c) => c.id !== id));
+      alert("Contact deleted");
+    } else {
+      alert("Delete failed");
+    }
+  } catch (error) {
+    console.log(error);
+    alert("Server error");
+  }
+};
+
+
   return (
     <View style={styles.container}>
       <ScrollView contentContainerStyle={{ paddingBottom: 160 }}>
@@ -109,8 +132,12 @@ useFocusEffect(
           </View>
         ) : (
           contacts.map((item) => (
-            <ContactCard key={item.id} contact={item} />
-          ))
+  <ContactCard
+    key={item.id}
+    contact={item}
+    onDelete={handleDelete}
+  />
+))
         )}
       </ScrollView>
 
@@ -135,7 +162,7 @@ useFocusEffect(
 
 /* ---------- CONTACT CARD COMPONENT ---------- */
 
-const ContactCard = ({ contact }: any) => {
+const ContactCard = ({ contact, onDelete }: any) => {
   const router = useRouter();
 
   return (
@@ -169,18 +196,32 @@ const ContactCard = ({ contact }: any) => {
         <TouchableOpacity style={styles.iconButton}>
           <MaterialIcons name="chat-bubble" size={18} color="#ec1313" />
         </TouchableOpacity>
+        <TouchableOpacity
+  onPress={() =>
+    Alert.alert(
+      "Delete Contact",
+      "Are you sure you want to delete this contact?",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Delete", onPress: () => onDelete(contact.id) }
+      ]
+    )
+  }
+>
+  <MaterialIcons name="delete" size={20} color="#ff4444" />
+</TouchableOpacity>
 
         {/* THREE DOT EDIT */}
         <TouchableOpacity
-          onPress={() =>
-            router.push({
-              pathname: "/addcontact",
-              params: { contact: JSON.stringify(contact) },
-            })
-          }
-        >
-          <MaterialIcons name="more-vert" size={20} color="#777" />
-        </TouchableOpacity>
+  onPress={() =>
+    router.push({
+      pathname: "/addcontact",
+      params: { contact: JSON.stringify(contact) },
+    })
+  }
+>
+  <MaterialIcons name="edit" size={20} color="#ec1313" />
+</TouchableOpacity>
       </View>
     </View>
   );

@@ -53,23 +53,21 @@ useEffect(() => {
     const email = await AsyncStorage.getItem("userEmail");
 
     let url = "";
-    let method = "POST";
+    let method = "";
 
-    if (params.contact) {
-      const contact = JSON.parse(params.contact as string);
-
-      url = `http://10.200.110.103:5000/update-contact/${contact.id}`;
+    if (contactId) {
+      // UPDATE
+      url = `http://10.200.110.103:5000/update-contact/${contactId}`;
       method = "PUT";
     } else {
+      // ADD NEW
       url = "http://10.200.110.103:5000/add-contact";
       method = "POST";
     }
 
     const response = await fetch(url, {
       method,
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         email,
         name,
@@ -80,10 +78,6 @@ useEffect(() => {
         gender,
       }),
     });
-    if (contactId) {
-  url = `http://10.200.110.103:5000/update-contact/${contactId}`;
-  method = "PUT";
-}
 
     const data = await response.json();
 
@@ -92,8 +86,7 @@ useEffect(() => {
       return;
     }
 
-    alert(params.contact ? "Contact updated" : "Contact added");
-
+    alert(contactId ? "Contact Updated" : "Contact Added");
     router.back();
 
   } catch (error) {
@@ -101,6 +94,7 @@ useEffect(() => {
     alert("Server error");
   }
 };
+
 
 const handleUpdate = async () => {
   try {
@@ -151,7 +145,9 @@ const handleUpdate = async () => {
             </View>
           </TouchableOpacity>
 
-          <Text style={styles.headerTitle}>ADD CONTACT</Text>
+          <Text style={styles.headerTitle}>
+  {contactId ? "EDIT CONTACT" : "ADD CONTACT"}
+</Text>
 
           <View style={{ width: 40 }} />
         </View>
@@ -249,7 +245,9 @@ const handleUpdate = async () => {
             color="#fff"
             style={{ marginRight: 8 }}
           />
-          <Text style={styles.saveText}>SAVE CONTACT</Text>
+          <Text style={styles.saveText}>
+  {contactId ? "UPDATE CONTACT" : "SAVE CONTACT"}
+</Text>
         </TouchableOpacity>
 
         <Text style={styles.footerNote}>

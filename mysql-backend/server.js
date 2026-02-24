@@ -312,10 +312,17 @@ app.get("/contacts/:email", async (req, res) => {
 app.delete("/delete-contact/:id", (req, res) => {
   const { id } = req.params;
 
-  db.query("DELETE FROM contacts WHERE id = ?", [id], (err) => {
-    if (err) return res.status(500).json({ success: false });
-    res.json({ success: true, message: "Contact deleted" });
-  });
+  db.query(
+    "DELETE FROM contacts WHERE id = ?",
+    [id],
+    (err, result) => {
+      if (err) {
+        return res.status(500).json({ message: "Delete failed" });
+      }
+
+      res.json({ message: "Deleted successfully" });
+    }
+  );
 });
 
 
