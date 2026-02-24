@@ -8,7 +8,7 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from "react-native";
-import { useState,useEffect } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "expo-router";
 import { MaterialIcons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -23,108 +23,80 @@ export default function AddContact() {
   const [location, setLocation] = useState("");
   const [notes, setNotes] = useState("");
   const [gender, setGender] = useState<"male" | "female" | null>(null);
-  const params = useLocalSearchParams();
-  const contactData = params.contact
-  ? JSON.parse(params.contact as string)
-  : null;
+  const { contact } = useLocalSearchParams();
+  const [contactEmail, setContactEmail] = useState("");
 
-const contactId = contactData ? contactData.id : null;
+  const [contactId, setContactId] = useState<number | null>(null);
 
-useEffect(() => {
-  if (params.contact) {
-    const contact = JSON.parse(params.contact as string);
+  useEffect(() => {
+    if (!contact) return;
 
-    setName(contact.name);
-    setRelation(contact.relation);
-    setPhone(contact.phone);
-    setLocation(contact.location);
-    setNotes(contact.notes);
-    setGender(contact.gender);
-  }
-}, [params]);
+    const parsed = JSON.parse(contact as string);
+
+    setContactId(parsed.id);
+    setName(parsed.name || "");
+    setRelation(parsed.relation || "");
+    setPhone(parsed.phone || "");
+    setLocation(parsed.location || "");
+    setNotes(parsed.notes || "");
+    setGender(parsed.gender || null);
+    setContactEmail(parsed.contact_email || "");
+  }, [contact]);
 
   const handleSave = async () => {
-  try {
-    if (!name.trim() || !phone.trim() || !gender) {
-      alert("Name, Phone and Gender are required");
-      return;
-    }
+    try {
+      if (!name.trim() || !phone.trim() || !gender) {
+        alert("Name, Phone and Gender are required");
+        return;
+      }
 
-    const email = await AsyncStorage.getItem("userEmail");
+      const email = await AsyncStorage.getItem("userEmail");
 
-    let url = "";
-    let method = "";
+      let url = "";
+      let method = "";
 
-    if (contactId) {
-      // UPDATE
-      url = `http://10.200.110.103:5000/update-contact/${contactId}`;
-      method = "PUT";
-    } else {
-      // ADD NEW
-      url = "http://10.200.110.103:5000/add-contact";
-      method = "POST";
-    }
+      if (contactId !== null) {
+        // UPDATE
+        url = `http://10.200.110.103:5000/update-contact/${contactId}`;
+        method = "PUT";
+      } else {
+        // ADD NEW
+        url = "http://10.200.110.103:5000/add-contact";
+        method = "POST";
+      }
 
-    const response = await fetch(url, {
-      method,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        email,
-        name,
-        relation,
-        phone,
-        location,
-        notes,
-        gender,
-      }),
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      alert(data.message || "Operation failed");
-      return;
-    }
-
-    alert(contactId ? "Contact Updated" : "Contact Added");
-    router.back();
-
-  } catch (error) {
-    console.log(error);
-    alert("Server error");
-  }
-};
-
-
-const handleUpdate = async () => {
-  try {
-    const response = await fetch(
-      `http://10.200.110.103:5000/update-contact/${contactId}`,
-      {
-        method: "PUT",
+      const response = await fetch(url, {
+        method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          email,
           name,
           relation,
           phone,
+          contact_email: contactEmail,
           location,
           notes,
           gender,
         }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        alert(data.message || "Operation failed");
+        return;
       }
-    );
 
-    if (response.ok) {
-      alert("Contact updated!");
+      alert(contactId ? "Contact Updated" : "Contact Added");
       router.back();
-    } else {
-      alert("Update failed");
-    }
 
-  } catch (error) {
-    console.log(error);
-  }
-};
+    } catch (error) {
+      console.log(error);
+      alert("Server error");
+    }
+  };
+
+
 
   return (
     <KeyboardAvoidingView
@@ -146,8 +118,8 @@ const handleUpdate = async () => {
           </TouchableOpacity>
 
           <Text style={styles.headerTitle}>
-  {contactId ? "EDIT CONTACT" : "ADD CONTACT"}
-</Text>
+            {contactId ? "EDIT CONTACT" : "ADD CONTACT"}
+          </Text>
 
           <View style={{ width: 40 }} />
         </View>
@@ -160,8 +132,8 @@ const handleUpdate = async () => {
                 gender === "male"
                   ? "man"
                   : gender === "female"
-                  ? "woman"
-                  : "person"
+                    ? "woman"
+                    : "person"
               }
               size={60}
               color="#EC5B13"
@@ -222,6 +194,12 @@ const handleUpdate = async () => {
             onChange={setPhone}
             keyboardType="phone-pad"
           />
+          <InputField
+            label="EMAIL ID"
+            value={contactEmail}
+            onChange={setContactEmail}
+            keyboardType="email-address"
+          />
           <InputField label="LOCATION" value={location} onChange={setLocation} />
 
           <View style={{ marginBottom: 15 }}>
@@ -246,8 +224,8 @@ const handleUpdate = async () => {
             style={{ marginRight: 8 }}
           />
           <Text style={styles.saveText}>
-  {contactId ? "UPDATE CONTACT" : "SAVE CONTACT"}
-</Text>
+            {contactId ? "UPDATE CONTACT" : "SAVE CONTACT"}
+          </Text>
         </TouchableOpacity>
 
         <Text style={styles.footerNote}>

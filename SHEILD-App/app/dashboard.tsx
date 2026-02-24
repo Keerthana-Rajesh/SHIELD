@@ -26,157 +26,195 @@ export default function Dashboard() {
     checkLogin();
   }, []);
 
+  const handleSOS = async () => {
+    try {
+      const email = await AsyncStorage.getItem("userEmail");
+
+      if (!email) {
+        Alert.alert("Error", "User not found");
+        return;
+      }
+
+      Alert.alert("SOS Triggered", "Sending emergency alert...");
+
+      const response = await fetch(
+        "http://10.200.110.103:5000/send-sos",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email }),
+        }
+      );
+
+      const data = await response.json();
+
+      if (response.ok) {
+        Alert.alert("Success", "Emergency alert sent!");
+      } else {
+        Alert.alert("Error", data.message || "Failed to send alert");
+      }
+
+    } catch (error) {
+      console.log(error);
+      Alert.alert("Server Error");
+    }
+  };
+
   // 🚪 Logout with confirmation
   const handleLogout = () => {
-  Alert.alert(
-    "Logout",
-    "Are you sure you want to logout?",
-    [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Logout",
-        onPress: async () => {
-          await AsyncStorage.clear(); // 🔥 clear everything
+    Alert.alert(
+      "Logout",
+      "Are you sure you want to logout?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Logout",
+          onPress: async () => {
+            await AsyncStorage.clear(); // 🔥 clear everything
 
-          Alert.alert("Success", "Logged out successfully!");
+            Alert.alert("Success", "Logged out successfully!");
 
-          router.replace("/phone"); // 🔥 go directly to login
+            router.replace("/phone"); // 🔥 go directly to login
+          },
         },
-      },
-    ]
-  );
-};
+      ]
+    );
+  };
 
 
 
   return (
-  <View style={styles.container}>
+    <View style={styles.container}>
 
-    {/* 🔥 HEADER OUTSIDE SCROLLVIEW */}
-    <View
-  style={{
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: 20,
-    paddingVertical: 15,
-    backgroundColor: "#181111",
-  }}
->
-  <MaterialIcons name="favorite" size={28} color="#ec1313" />
+      {/* 🔥 HEADER OUTSIDE SCROLLVIEW */}
+      <View
+        style={{
+          flexDirection: "row",
+          justifyContent: "space-between",
+          alignItems: "center",
+          paddingHorizontal: 20,
+          paddingVertical: 15,
+          backgroundColor: "#181111",
+        }}
+      >
+        <MaterialIcons name="favorite" size={28} color="#ec1313" />
 
-  <Text
-    style={{
-      color: "#fff",
-      fontSize: 20,
-      fontWeight: "bold",
-    }}
-  >
-    SHIELD
-  </Text>
+        <Text
+          style={{
+            color: "#fff",
+            fontSize: 20,
+            fontWeight: "bold",
+          }}
+        >
+          SHIELD
+        </Text>
 
-  <TouchableOpacity
-    onPress={handleLogout}
-    style={{
-      padding: 10,
-      borderRadius: 50,
-      backgroundColor: "#2a1b1b",
-      alignItems: "center",
-      justifyContent: "center",
-    }}
-  >
-    <MaterialIcons name="logout" size={26} color="#ec1313" />
-  </TouchableOpacity>
-</View>
-
-    {/* 🔥 SCROLLABLE CONTENT */}
-    <ScrollView contentContainerStyle={{ paddingBottom: 120 }}>
-
-      {/* Status Header */}
-      <View style={styles.statusSection}>
-        <Text style={styles.statusTitle}>Safety Service Active</Text>
-        <View style={styles.statusRow}>
-          <View style={styles.greenDot} />
-          <Text style={styles.statusSub}>
-            System monitoring for your safety
-          </Text>
-        </View>
-      </View>
-
-      {/* SOS Button Section */}
-      <View style={styles.sosContainer}>
-        <View style={styles.sosOuter} />
-        <View style={styles.sosMiddle} />
-
-        <TouchableOpacity style={styles.sosButton}>
-          <MaterialIcons name="back-hand" size={40} color="#fff" />
-          <Text style={styles.sosText}>HOLD TO TRIGGER</Text>
-          <Text style={styles.sosSub}>EMERGENCY SOS</Text>
+        <TouchableOpacity
+          onPress={handleLogout}
+          style={{
+            padding: 10,
+            borderRadius: 50,
+            backgroundColor: "#2a1b1b",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <MaterialIcons name="logout" size={26} color="#ec1313" />
         </TouchableOpacity>
       </View>
 
-      {/* Status Cards */}
-      <View style={styles.cardRow}>
-        <StatusCard icon="mic" label="Mic" value="Active" />
-        <StatusCard icon="location-on" label="Location" value="Shared" />
-        <StatusCard icon="sensors" label="Sensors" value="Locked" />
+      {/* 🔥 SCROLLABLE CONTENT */}
+      <ScrollView contentContainerStyle={{ paddingBottom: 120 }}>
+
+        {/* Status Header */}
+        <View style={styles.statusSection}>
+          <Text style={styles.statusTitle}>Safety Service Active</Text>
+          <View style={styles.statusRow}>
+            <View style={styles.greenDot} />
+            <Text style={styles.statusSub}>
+              System monitoring for your safety
+            </Text>
+          </View>
+        </View>
+
+        {/* SOS Button Section */}
+        <View style={styles.sosContainer}>
+          <View style={styles.sosOuter} />
+          <View style={styles.sosMiddle} />
+
+          <TouchableOpacity
+            style={styles.sosButton}
+            onLongPress={handleSOS}
+            delayLongPress={1000} // 1 second hold
+          >
+            <MaterialIcons name="back-hand" size={40} color="#fff" />
+            <Text style={styles.sosText}>HOLD TO TRIGGER</Text>
+            <Text style={styles.sosSub}>EMERGENCY SOS</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Status Cards */}
+        <View style={styles.cardRow}>
+          <StatusCard icon="mic" label="Mic" value="Active" />
+          <StatusCard icon="location-on" label="Location" value="Shared" />
+          <StatusCard icon="sensors" label="Sensors" value="Locked" />
+        </View>
+
+        {/* AI Banner */}
+        <View style={styles.aiBanner}>
+          <View style={styles.aiIcon}>
+            <MaterialIcons name="smart-toy" size={22} color="#ec1313" />
+          </View>
+          <View>
+            <Text style={styles.aiTitle}>AI Guardian is analyzing</Text>
+            <Text style={styles.aiSub}>
+              Silent mode enabled. No threats detected.
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.featureGrid}>
+
+          <FeatureButton icon="group" label="Emergency Contacts" route="/contacts" />
+          <FeatureButton icon="timer" label="Safety Timer" route="/timer" />
+          <FeatureButton icon="location-on" label="Share Location" route="/location" />
+          <FeatureButton icon="phone-in-talk" label="Fake Call" route="/fake-call" />
+          <FeatureButton icon="call" label="Helpline Numbers" route="/helpline" />
+          <FeatureButton icon="verified-user" label="Trusted Circles" route="/circles" />
+          <FeatureButton icon="report" label="Report Incident" route="/report" />
+          <FeatureButton icon="smart-toy" label="AI Guardian" route="/ai" />
+
+        </View>
+
+      </ScrollView>
+
+      {/* Bottom Navigation */}
+      <View style={styles.navBar}>
+        <NavItem
+          icon="home"
+          label="Home"
+          active
+          onPress={() => router.replace("/dashboard")}
+        />
+        <NavItem
+          icon="group"
+          label="Contacts"
+          onPress={() => router.push("/contacts")}
+        />
+        <NavItem
+          icon="map"
+          label="SafeMap"
+          onPress={() => router.push("/safemap")}
+        />
+        <NavItem
+          icon="person"
+          label="Profile"
+          onPress={() => router.push("/profile")}
+        />
       </View>
 
-      {/* AI Banner */}
-      <View style={styles.aiBanner}>
-        <View style={styles.aiIcon}>
-          <MaterialIcons name="smart-toy" size={22} color="#ec1313" />
-        </View>
-        <View>
-          <Text style={styles.aiTitle}>AI Guardian is analyzing</Text>
-          <Text style={styles.aiSub}>
-            Silent mode enabled. No threats detected.
-          </Text>
-        </View>
-      </View>
-
-      <View style={styles.featureGrid}>
-
-  <FeatureButton icon="group" label="Emergency Contacts" route="/contacts" />
-  <FeatureButton icon="timer" label="Safety Timer" route="/timer" />
-  <FeatureButton icon="location-on" label="Share Location" route="/location" />
-  <FeatureButton icon="phone-in-talk" label="Fake Call" route="/fake-call" />
-  <FeatureButton icon="call" label="Helpline Numbers" route="/helpline" />
-  <FeatureButton icon="verified-user" label="Trusted Circles" route="/circles" />
-  <FeatureButton icon="report" label="Report Incident" route="/report" />
-  <FeatureButton icon="smart-toy" label="AI Guardian" route="/ai" />
-
-</View>
-
-    </ScrollView>
-
-    {/* Bottom Navigation */}
-    <View style={styles.navBar}>
-      <NavItem
-        icon="home"
-        label="Home"
-        active
-        onPress={() => router.replace("/dashboard")}
-      />
-      <NavItem
-        icon="group"
-        label="Contacts"
-        onPress={() => router.push("/contacts")}
-      />
-      <NavItem
-        icon="map"
-        label="SafeMap"
-        onPress={() => router.push("/safemap")}
-      />
-      <NavItem
-        icon="person"
-        label="Profile"
-        onPress={() => router.push("/profile")}
-      />
     </View>
-
-  </View>
-);
+  );
 
 }
 
@@ -242,22 +280,22 @@ const styles = StyleSheet.create({
   },
 
   header: {
-  flexDirection: "row",
-  justifyContent: "space-between",
-  alignItems: "center",
-  paddingHorizontal: 20,
-  paddingTop: 15,
-  paddingBottom: 10,
-  backgroundColor: "#181111",
-  zIndex: 10,   // important
-},
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingTop: 15,
+    paddingBottom: 10,
+    backgroundColor: "#181111",
+    zIndex: 10,   // important
+  },
 
 
   headerTitle: {
-  color: "#fff",
-  fontSize: 20,
-  fontWeight: "bold",
-},
+    color: "#fff",
+    fontSize: 20,
+    fontWeight: "bold",
+  },
 
 
   profileButton: {
@@ -449,28 +487,28 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   featureGrid: {
-  flexDirection: "row",
-  flexWrap: "wrap",
-  justifyContent: "space-between",
-  paddingHorizontal: 20,
-  marginTop: 10,
-},
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+    paddingHorizontal: 20,
+    marginTop: 10,
+  },
 
-featureCard: {
-  width: "47%",
-  backgroundColor: "#2a1b1b",
-  paddingVertical: 25,
-  borderRadius: 20,
-  alignItems: "center",
-  justifyContent: "center",
-  marginBottom: 15,
-  elevation: 5,
-},
+  featureCard: {
+    width: "47%",
+    backgroundColor: "#2a1b1b",
+    paddingVertical: 25,
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 15,
+    elevation: 5,
+  },
 
-featureLabel: {
-  marginTop: 8,
-  fontSize: 12,
-  color: "#ddd",
-  textAlign: "center",
-},
+  featureLabel: {
+    marginTop: 8,
+    fontSize: 12,
+    color: "#ddd",
+    textAlign: "center",
+  },
 });

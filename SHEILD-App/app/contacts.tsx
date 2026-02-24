@@ -16,83 +16,84 @@ import { Alert } from "react-native";
 export default function Contacts() {
   const router = useRouter();
   const [contacts, setContacts] = useState<any[]>([]);
-const [loading, setLoading] = useState(false);
-useFocusEffect(
-  useCallback(() => {
-    let isActive = true;
+  const [loading, setLoading] = useState(false);
+  useFocusEffect(
+    useCallback(() => {
+      let isActive = true;
 
-    const loadContacts = async () => {
-      try {
-        setLoading(true);
+      const loadContacts = async () => {
+        try {
+          setLoading(true);
 
-        const email = await AsyncStorage.getItem("userEmail");
+          const email = await AsyncStorage.getItem("userEmail");
 
-        if (!email) {
+          if (!email) {
+            if (isActive) setContacts([]);
+            return;
+          }
+
+          const response = await fetch(
+            `http://10.200.110.103:5000/contacts/${email}`
+          );
+
+          if (!response.ok) {
+            console.log("Server error:", response.status);
+            if (isActive) setContacts([]);
+            return;
+          }
+
+          const data = await response.json();
+          console.log("Contacts API response:", data);
+          console.log("Loaded contacts:", data);
+
+          if (!isActive) return;
+
+          // 🔥 SAFELY HANDLE ANY RESPONSE FORMAT
+          if (Array.isArray(data)) {
+            setContacts(data);
+          } else if (Array.isArray(data.contacts)) {
+            setContacts(data.contacts);
+          } else {
+            setContacts([]);
+          }
+
+        } catch (error) {
+          console.log("Error loading contacts:", error);
           if (isActive) setContacts([]);
-          return;
+        } finally {
+          if (isActive) setLoading(false);
         }
+      };
 
-        const response = await fetch(
-          `http://10.200.110.103:5000/contacts/${email}`
-        );
+      loadContacts();
 
-        if (!response.ok) {
-          console.log("Server error:", response.status);
-          if (isActive) setContacts([]);
-          return;
+      return () => {
+        isActive = false;
+      };
+    }, [])
+  );
+
+
+  const handleDelete = async (id: number) => {
+    try {
+      const response = await fetch(
+        `http://10.200.110.103:5000/delete-contact/${id}`,
+        {
+          method: "DELETE",
         }
+      );
 
-        const data = await response.json();
-        console.log("Contacts API response:", data);
-
-        if (!isActive) return;
-
-        // 🔥 SAFELY HANDLE ANY RESPONSE FORMAT
-        if (Array.isArray(data)) {
-          setContacts(data);
-        } else if (Array.isArray(data.contacts)) {
-          setContacts(data.contacts);
-        } else {
-          setContacts([]);
-        }
-
-      } catch (error) {
-        console.log("Error loading contacts:", error);
-        if (isActive) setContacts([]);
-      } finally {
-        if (isActive) setLoading(false);
+      if (response.ok) {
+        setContacts((prev) => prev.filter((c) => c.id !== id));
+        alert("Contact deleted");
+      } else {
+        alert("Delete failed");
       }
-    };
-
-    loadContacts();
-
-    return () => {
-      isActive = false;
-    };
-  }, [])
-);
-
-
-const handleDelete = async (id: number) => {
-  try {
-    const response = await fetch(
-      `http://10.200.110.103:5000/delete-contact/${id}`,
-      {
-        method: "DELETE",
-      }
-    );
-
-    if (response.ok) {
-      setContacts((prev) => prev.filter((c) => c.id !== id));
-      alert("Contact deleted");
-    } else {
-      alert("Delete failed");
+    } catch (error) {
+      console.log(error);
+      alert("Server error");
     }
-  } catch (error) {
-    console.log(error);
-    alert("Server error");
-  }
-};
+  };
 
 
   return (
@@ -132,12 +133,12 @@ const handleDelete = async (id: number) => {
           </View>
         ) : (
           contacts.map((item) => (
-  <ContactCard
-    key={item.id}
-    contact={item}
-    onDelete={handleDelete}
-  />
-))
+            <ContactCard
+              key={item.id}
+              contact={item}
+              onDelete={handleDelete}
+            />
+          ))
         )}
       </ScrollView>
 
@@ -173,8 +174,8 @@ const ContactCard = ({ contact, onDelete }: any) => {
             contact.gender === "male"
               ? "man"
               : contact.gender === "female"
-              ? "woman"
-              : "person"
+                ? "woman"
+                : "person"
           }
           size={30}
           color="#ec1313"
@@ -185,6 +186,9 @@ const ContactCard = ({ contact, onDelete }: any) => {
         <Text style={styles.cardName}>{contact.name}</Text>
         <Text style={styles.cardSub}>
           {contact.relation} • {contact.phone}
+        </Text>
+        <Text style={{ color: "#888", fontSize: 11 }}>
+          {contact.contact_email}
         </Text>
       </View>
 
@@ -197,31 +201,31 @@ const ContactCard = ({ contact, onDelete }: any) => {
           <MaterialIcons name="chat-bubble" size={18} color="#ec1313" />
         </TouchableOpacity>
         <TouchableOpacity
-  onPress={() =>
-    Alert.alert(
-      "Delete Contact",
-      "Are you sure you want to delete this contact?",
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Delete", onPress: () => onDelete(contact.id) }
-      ]
-    )
-  }
->
-  <MaterialIcons name="delete" size={20} color="#ff4444" />
-</TouchableOpacity>
+          onPress={() =>
+            Alert.alert(
+              "Delete Contact",
+              "Are you sure you want to delete this contact?",
+              [
+                { text: "Cancel", style: "cancel" },
+                { text: "Delete", onPress: () => onDelete(contact.id) }
+              ]
+            )
+          }
+        >
+          <MaterialIcons name="delete" size={20} color="#ff4444" />
+        </TouchableOpacity>
 
         {/* THREE DOT EDIT */}
         <TouchableOpacity
-  onPress={() =>
-    router.push({
-      pathname: "/addcontact",
-      params: { contact: JSON.stringify(contact) },
-    })
-  }
->
-  <MaterialIcons name="edit" size={20} color="#ec1313" />
-</TouchableOpacity>
+          onPress={() =>
+            router.push({
+              pathname: "/addcontact",
+              params: { contact: JSON.stringify(contact) },
+            })
+          }
+        >
+          <MaterialIcons name="edit" size={20} color="#ec1313" />
+        </TouchableOpacity>
       </View>
     </View>
   );

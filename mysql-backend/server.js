@@ -327,21 +327,30 @@ app.delete("/delete-contact/:id", (req, res) => {
 
 
 app.put("/update-contact/:id", async (req, res) => {
+  const {
+    name,
+    relation,
+    phone,
+    contact_email,   // 👈 ADD THIS
+    location,
+    notes,
+    gender,
+  } = req.body;
+
   const { id } = req.params;
-  const { name, relation, phone, location, notes, gender } = req.body;
 
   try {
     await db.promise().query(
-      `UPDATE contacts
-       SET name = ?, relation = ?, phone = ?, location = ?, notes = ?, gender = ?
-       WHERE id = ?`,
-      [name, relation, phone, location, notes, gender, id]
+      `UPDATE contacts 
+       SET name=?, relation=?, phone=?, contact_email=?, location=?, notes=?, gender=? 
+       WHERE id=?`,
+      [name, relation, phone, contact_email, location, notes, gender, id]
     );
 
     res.json({ message: "Contact updated successfully" });
 
   } catch (error) {
-    console.log(error);
+    console.error(error);
     res.status(500).json({ message: "Server error" });
   }
 });
@@ -352,4 +361,67 @@ app.put("/update-contact/:id", async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
+});
+
+
+
+app.post("/send-sos", async (req, res) => {
+  const { email } = req.body;
+
+  try {
+    // 1️⃣ Get user info
+    const [userRows] = await db.promise().query(
+      "SELECT id, name FROM users WHERE email = ?",
+      [email]
+    );
+
+    if (userRows.length === 0) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const userId = userRows[0].id;
+    const userName = userRows[0].name;
+
+    // 2️⃣ Get trusted contacts with valid emails
+    const [contacts] = await db.promise().query(
+      "SELECT contact_email FROM contacts WHERE user_id = ? AND contact_email IS NOT NULL AND contact_email != ''",
+      [userId]
+    );
+
+    if (contacts.length === 0) {
+      return res.status(400).json({ message: "No trusted emails found" });
+    }
+
+    // 3️⃣ Extract recipient emails safely
+    const recipients = contacts
+      .map(c => c.contact_email)
+      .filter(Boolean);
+
+    if (recipients.length === 0) {
+      return res.status(400).json({ message: "No valid emails found" });
+    }
+
+    // 4️⃣ Setup transporter
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: {
+        user: "krishnanjalys98@gmail.com",   // your gmail
+        pass: "errlarajtydhopyn",            // app password
+      },
+    });
+
+    // 5️⃣ Send single email to all contacts
+    await transporter.sendMail({
+      from: "krishnanjalys98@gmail.com",
+      to: recipients, // array of emails
+      subject: "🚨 EMERGENCY ALERT - SHIELD",
+      text: `${userName} has triggered an SOS emergency alert!\n\nPlease contact them immediately.`,
+    });
+
+    res.json({ message: "SOS emails sent successfully" });
+
+  } catch (err) {
+    console.error("SOS Error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
 });
