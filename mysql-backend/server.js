@@ -228,10 +228,19 @@ app.put("/update-user/:email", (req, res) => {
    🔹 ADD CONTACT
 ================================ */
 app.post("/add-contact", async (req, res) => {
-  const { email, name, relation, phone, location, notes, gender } = req.body;
+  const {
+    email,
+    name,
+    relation,
+    phone,
+    contact_email,
+    location,
+    notes,
+    gender,
+  } = req.body;
 
   try {
-    // 1️⃣ Get user id from email
+    // 1️⃣ Get user ID from email
     const [userRows] = await db.promise().query(
       "SELECT id FROM users WHERE email = ?",
       [email]
@@ -244,17 +253,27 @@ app.post("/add-contact", async (req, res) => {
     const userId = userRows[0].id;
 
     // 2️⃣ Insert contact using user_id
-    await db.promise().query(
-      `INSERT INTO contacts 
-       (user_id, name, relation, phone, location, notes, gender)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [userId, name, relation, phone, location, notes, gender]
-    );
+    const query = `
+      INSERT INTO contacts 
+      (user_id, name, relation, phone, contact_email, location, notes, gender)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+
+    await db.promise().query(query, [
+      userId,
+      name,
+      relation,
+      phone,
+      contact_email,
+      location,
+      notes,
+      gender,
+    ]);
 
     res.json({ message: "Contact added successfully" });
 
-  } catch (error) {
-    console.log(error);
+  } catch (err) {
+    console.error("Add Contact Error:", err);
     res.status(500).json({ message: "Server error" });
   }
 });
@@ -422,6 +441,65 @@ app.post("/send-sos", async (req, res) => {
 
   } catch (err) {
     console.error("SOS Error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+
+app.post("/cancel-sos", async (req, res) => {
+  const { email } = req.body;
+
+  try {
+    // 1️⃣ Get user
+    const [userRows] = await db.promise().query(
+      "SELECT id, name FROM users WHERE email = ?",
+      [email]
+    );
+
+    if (userRows.length === 0) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const userId = userRows[0].id;
+    const userName = userRows[0].name;
+
+    // 2️⃣ Get trusted contacts using user_id
+    const [contacts] = await db.promise().query(
+      "SELECT contact_email FROM contacts WHERE user_id = ? AND contact_email IS NOT NULL AND contact_email != ''",
+      [userId]
+    );
+
+    const recipients = contacts
+      .map(c => c.contact_email)
+      .filter(Boolean);
+
+    if (recipients.length === 0) {
+      return res.status(400).json({ message: "No valid emails found" });
+    }
+
+    // 3️⃣ Setup transporter
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
+      },
+    });
+
+    // 4️⃣ Send SAFE email
+    const info = await transporter.sendMail({
+      from: process.env.EMAIL_USER,
+      to: recipients,
+      subject: "✅ SHIELD ALERT CANCELLED",
+      text: `${userName} is SAFE now. Please ignore the previous emergency alert.`,
+    });
+
+    console.log("Safe email sent:", info.accepted);
+
+    res.json({ message: "Safe notification sent" });
+
+  } catch (err) {
+    console.error("Cancel SOS Error:", err);
     res.status(500).json({ message: "Server error" });
   }
 });

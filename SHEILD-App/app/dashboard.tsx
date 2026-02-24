@@ -27,38 +27,25 @@ export default function Dashboard() {
   }, []);
 
   const handleSOS = async () => {
-    try {
-      const email = await AsyncStorage.getItem("userEmail");
+    const email = await AsyncStorage.getItem("userEmail");
+    console.log("Cancel SOS called for:", email);
 
-      if (!email) {
-        Alert.alert("Error", "User not found");
-        return;
+    const response = await fetch(
+      "http://10.200.110.103:5000/send-sos",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
       }
+    );
 
-      Alert.alert("SOS Triggered", "Sending emergency alert...");
-
-      const response = await fetch(
-        "http://10.200.110.103:5000/send-sos",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email }),
-        }
-      );
-
-      const data = await response.json();
-
-      if (response.ok) {
-        Alert.alert("Success", "Emergency alert sent!");
-      } else {
-        Alert.alert("Error", data.message || "Failed to send alert");
-      }
-
-    } catch (error) {
-      console.log(error);
-      Alert.alert("Server Error");
+    if (response.ok) {
+      router.push("/emergency");
+    } else {
+      alert("Failed to send emergency alert");
     }
   };
+
 
   // 🚪 Logout with confirmation
   const handleLogout = () => {
