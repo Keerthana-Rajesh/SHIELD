@@ -13,6 +13,7 @@ import { useRouter } from "expo-router";
 import { MaterialIcons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useLocalSearchParams } from "expo-router";
+import BASE_URL from "../config/api";
 
 export default function AddContact() {
   const router = useRouter();
@@ -31,16 +32,23 @@ export default function AddContact() {
   useEffect(() => {
     if (!contact) return;
 
-    const parsed = JSON.parse(contact as string);
+    try {
+      const parsed =
+        typeof contact === "string"
+          ? JSON.parse(contact)
+          : contact;
 
-    setContactId(parsed.id);
-    setName(parsed.name || "");
-    setRelation(parsed.relation || "");
-    setPhone(parsed.phone || "");
-    setLocation(parsed.location || "");
-    setNotes(parsed.notes || "");
-    setGender(parsed.gender || null);
-    setContactEmail(parsed.contact_email || "");
+      setContactId(parsed?.id ?? null);
+      setName(parsed?.name ?? "");
+      setRelation(parsed?.relation ?? "");
+      setPhone(parsed?.phone ?? "");
+      setLocation(parsed?.location ?? "");
+      setNotes(parsed?.notes ?? "");
+      setGender(parsed?.gender ?? null);
+      setContactEmail(parsed?.contact_email ?? "");
+    } catch (error) {
+      console.log("Contact parse error:", error);
+    }
   }, [contact]);
 
   const handleSave = async () => {
@@ -52,16 +60,16 @@ export default function AddContact() {
 
       const email = await AsyncStorage.getItem("userEmail");
 
-      let url = "";
-      let method = "";
+      let url = `${BASE_URL}/add-contact`;
+      let method = contactId !== null ? "PUT" : "POST";
 
       if (contactId !== null) {
         // UPDATE
-        url = `http://10.200.110.103:5000/update-contact/${contactId}`;
+        fetch(`${BASE_URL}/add-contact`);
         method = "PUT";
       } else {
         // ADD NEW
-        url = "http://10.200.110.103:5000/add-contact";
+        fetch(`${BASE_URL}/add-contact`);
         method = "POST";
       }
 

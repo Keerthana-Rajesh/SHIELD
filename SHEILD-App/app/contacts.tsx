@@ -12,6 +12,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect } from "@react-navigation/native";
 import { useCallback } from "react";
 import { Alert } from "react-native";
+import BASE_URL from "../config/api";
 
 export default function Contacts() {
   const router = useRouter();
@@ -33,7 +34,7 @@ export default function Contacts() {
           }
 
           const response = await fetch(
-            `http://10.200.110.103:5000/contacts/${email}`
+            `${BASE_URL}/contacts/${email}`
           );
 
           if (!response.ok) {
@@ -77,7 +78,7 @@ export default function Contacts() {
   const handleDelete = async (id: number) => {
     try {
       const response = await fetch(
-        `http://10.200.110.103:5000/delete-contact/${id}`,
+        `${BASE_URL}/delete-contact/${id}`,
         {
           method: "DELETE",
         }

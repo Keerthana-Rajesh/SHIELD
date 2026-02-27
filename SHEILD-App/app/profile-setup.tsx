@@ -15,6 +15,7 @@ import { useState } from "react";
 import { useRouter } from "expo-router";
 import { MaterialIcons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import BASE_URL from "../config/api";
 
 export default function ProfileSetup() {
   const router = useRouter();
@@ -55,7 +56,7 @@ export default function ProfileSetup() {
       }
 
       const response = await fetch(
-        "http://10.200.110.103:5000/register-user",
+        `${BASE_URL}/register-user`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },

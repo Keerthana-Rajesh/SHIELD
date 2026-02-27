@@ -10,6 +10,7 @@ import { MaterialIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useEffect, useState } from "react";
+import BASE_URL from "../config/api";
 
 export default function Dashboard() {
   const router = useRouter();
@@ -32,7 +33,7 @@ export default function Dashboard() {
     console.log("Cancel SOS called for:", email);
 
     const response = await fetch(
-      "http://10.200.110.103:5000/send-sos",
+      `${BASE_URL}/send-sos`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -194,12 +195,12 @@ export default function Dashboard() {
         <View style={styles.featureGrid}>
 
           <FeatureButton icon="group" label="Emergency Contacts" route="/contacts" />
-          <FeatureButton icon="timer" label="Safety Timer" route="/timer" />
-          <FeatureButton icon="location-on" label="Share Location" route="/location" />
+          <FeatureButton icon="timer" label="Safety Timer" route="/safetimer" />
+          <FeatureButton icon="location-on" label="Share Location" route="/safemap" />
           <FeatureButton icon="phone-in-talk" label="Fake Call" route="/fake-call" />
           <FeatureButton icon="call" label="Helpline Numbers" route="/helpline" />
           <FeatureButton icon="verified-user" label="Trusted Circles" route="/circles" />
-          <FeatureButton icon="report" label="Report Incident" route="/report" />
+          <FeatureButton icon="report" label="About" route="/report" />
           <FeatureButton icon="smart-toy" label="AI Guardian" route="/ai" />
 
         </View>

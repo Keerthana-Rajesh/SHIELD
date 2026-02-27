@@ -12,6 +12,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "expo-router";
 import { MaterialIcons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import BASE_URL from "../config/api";
 
 export default function PhoneScreen() {
   const router = useRouter();
@@ -46,7 +47,7 @@ export default function PhoneScreen() {
       setLoading(true);
 
       const response = await fetch(
-        "http://10.200.110.103:5000/send-email-otp",
+        `${BASE_URL}/send-email-otp`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },

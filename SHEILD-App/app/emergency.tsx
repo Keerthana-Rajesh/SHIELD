@@ -8,6 +8,7 @@ import {
 import { useEffect, useRef } from "react";
 import { useRouter } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import BASE_URL from "../config/api";
 
 export default function EmergencyScreen() {
     const router = useRouter();
@@ -27,7 +28,7 @@ export default function EmergencyScreen() {
 
         try {
             const response = await fetch(
-                "http://10.200.110.103:5000/cancel-sos",
+                `${BASE_URL}/cancel-sos`,
                 {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },

@@ -47,6 +47,7 @@ export default function Settings() {
                 </View>
 
                 {/* KEYWORD SETUP */}
+                {/* KEYWORD SETUP */}
                 <Section title="KEYWORD SETUP">
 
                     <Row
@@ -58,26 +59,20 @@ export default function Settings() {
 
                     {keywordEnabled && (
                         <>
-                            <Text style={{ color: "#AAA", fontSize: 12 }}>
-                                Enter emergency keywords (comma separated)
-                            </Text>
-
-                            <TextInput
-                                placeholder="help, save me, emergency"
-                                placeholderTextColor="#777"
-                                style={styles.input}
-                                value={keywords}
-                                onChangeText={setKeywords}
-                            />
+                            <TouchableOpacity
+                                style={styles.keywordOption}
+                                onPress={() => router.push("/high-risk")}
+                            >
+                                <MaterialIcons name="warning" size={22} color="#EC1313" />
+                                <Text style={styles.keywordText}>High Risk Keywords</Text>
+                            </TouchableOpacity>
 
                             <TouchableOpacity
-                                style={styles.primaryBtn}
-                                onPress={() => {
-                                    console.log("Saved Keywords:", keywords);
-                                    alert("Keywords Saved Successfully");
-                                }}
+                                style={styles.keywordOption}
+                                onPress={() => router.push("/low-risk")}
                             >
-                                <Text style={styles.primaryText}>SAVE KEYWORDS</Text>
+                                <MaterialIcons name="info" size={22} color="#FFA500" />
+                                <Text style={styles.keywordText}>Low Risk Keywords</Text>
                             </TouchableOpacity>
                         </>
                     )}
@@ -94,7 +89,7 @@ export default function Settings() {
                     />
                     <Row
                         icon="power-settings-new"
-                        label="Triple Power Press"
+                        label="Long Power Press"
                         value={powerTrigger}
                         onValueChange={setPowerTrigger}
                     />
@@ -332,5 +327,20 @@ const styles = StyleSheet.create({
     navLabel: {
         fontSize: 10,
         marginTop: 2,
+    },
+    keywordOption: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 12,
+        backgroundColor: "#3A2720",
+        padding: 15,
+        borderRadius: 12,
+        marginTop: 10,
+    },
+
+    keywordText: {
+        color: "#fff",
+        fontSize: 14,
+        fontWeight: "600",
     },
 });

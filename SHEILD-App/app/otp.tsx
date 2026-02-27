@@ -10,6 +10,7 @@ import {
 import { useState } from "react";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import BASE_URL from "../config/api";
 
 
 export default function OtpScreen() {
@@ -18,58 +19,74 @@ export default function OtpScreen() {
 
   const [otp, setOtp] = useState("");
   const [loading, setLoading] = useState(false);
-
   const handleVerify = async () => {
-  if (!email) {
-    Alert.alert("Error", "Email missing.");
-    return;
-  }
-
-  if (!otp || otp.length !== 6) {
-    Alert.alert("Invalid OTP", "Enter a valid 6-digit OTP");
-    return;
-  }
-
-  try {
-    setLoading(true);
-
-    const emailString =
-      Array.isArray(email) ? email[0] : email;
-
-    const response = await fetch(
-      "http://10.200.110.103:5000/verify-email-otp",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: emailString,
-          otp,
-        }),
-      }
-    );
-
-    const data = await response.json();
-
-    if (response.ok && data.success) {
-      await AsyncStorage.setItem("isLoggedIn", "true");
-      await AsyncStorage.setItem("userEmail", emailString);
-
-      if (data.existingUser) {
-        router.replace("/dashboard");
-      } else {
-        router.replace("/profile-setup");
-      }
-    } else {
-      Alert.alert("Error ❌", data.message || "Invalid OTP");
+    if (!email) {
+      Alert.alert("Error", "Email missing.");
+      return;
     }
-  } catch (error) {
-    console.log("OTP Verify Error:", error);
-    Alert.alert("Server Error", "Unable to connect to server");
-  } finally {
-    setLoading(false);
-  }
-};
 
+    if (!otp || otp.length !== 6) {
+      Alert.alert("Invalid OTP", "Enter a valid 6-digit OTP");
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      const emailString =
+        Array.isArray(email) ? email[0] : email;
+
+      const response = await fetch(
+        `${BASE_URL}/verify-email-otp`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: emailString,
+            otp,
+          }),
+        }
+      );
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+
+        const emailString =
+          Array.isArray(email) ? email[0] : email;
+
+        // Save login status
+        await AsyncStorage.setItem("isLoggedIn", "true");
+        await AsyncStorage.setItem("userEmail", emailString);
+
+        // 🔥 Always fetch user from backend
+        const userResponse = await fetch(`${BASE_URL}/user/${emailString}`);
+        const userData = await userResponse.json();
+
+        if (userResponse.ok && userData.id) {
+          await AsyncStorage.setItem(
+            "userId",
+            userData.id.toString()
+          );
+          console.log("Stored userId:", userData.id);
+        } else {
+          console.log("User not found after OTP");
+        }
+
+        if (data.existingUser) {
+          router.replace("/dashboard");
+        } else {
+          router.replace("/profile-setup");
+        }
+      }
+
+    } catch (error) {
+      console.log("OTP Verify Error:", error);
+      Alert.alert("Server Error", "Unable to connect to server");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <View style={styles.container}>

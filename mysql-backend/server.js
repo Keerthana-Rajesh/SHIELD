@@ -2,11 +2,10 @@ const express = require("express");
 const mysql = require("mysql2");
 const cors = require("cors");
 const nodemailer = require("nodemailer");
-require("dotenv").config();
+require("dotenv").config()
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-
 app.use(cors());
 app.use(express.json());
 
@@ -501,5 +500,104 @@ app.post("/cancel-sos", async (req, res) => {
   } catch (err) {
     console.error("Cancel SOS Error:", err);
     res.status(500).json({ message: "Server error" });
+  }
+});
+
+app.post("/add-keyword", async (req, res) => {
+  const { user_id, keyword_text, security_level } = req.body;
+
+  try {
+    await db.promise().query(
+      "INSERT INTO emergency_keyword (user_id, keyword_text, security_level) VALUES (?, ?, ?)",
+      [user_id, keyword_text.toLowerCase(), security_level]
+    );
+
+    res.json({ message: "Keyword added successfully" });
+  } catch (error) {
+    console.error("Add Keyword Error:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+
+app.get("/get-keywords/:user_id/:level", async (req, res) => {
+  const { user_id, level } = req.params;
+
+  try {
+    const [rows] = await db.promise().query(
+      "SELECT * FROM emergency_keyword WHERE user_id = ? AND security_level = ?",
+      [user_id, level]
+    );
+
+    res.json(rows);
+  } catch (error) {
+    console.error("Fetch Keyword Error:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+
+app.delete("/delete-keyword/:id", async (req, res) => {
+  try {
+    await db.promise().query(
+      "DELETE FROM emergency_keyword WHERE keyword_id = ?",
+      [req.params.id]
+    );
+
+    res.json({ message: "Keyword deleted" });
+  } catch (error) {
+    console.error("Delete Keyword Error:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+
+
+app.post("/send-emergency", async (req, res) => {
+  try {
+    const { recipients, location } = req.body;
+    console.log("📨 Emergency route triggered");
+    console.log("Recipients:", recipients);
+    console.log("Location:", location);
+
+    if (!recipients || recipients.length === 0) {
+      return res.status(400).json({ message: "No recipients provided" });
+    }
+
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
+      },
+    });
+
+    await transporter.sendMail({
+      from: `"SHIELD Emergency" <${process.env.EMAIL_USER}>`,
+      to: recipients,
+      subject: "🚨 SHIELD EMERGENCY ALERT 🚨",
+      text: `
+I may be in danger.
+
+My live location:
+${location}
+
+Please help immediately.
+
+— SHIELD Safety App
+      `,
+    });
+
+    res.status(200).json({ message: "Emergency email sent successfully" });
+
+  } catch (error) {
+    console.log("🔥🔥🔥 EMAIL ERROR START 🔥🔥🔥");
+    console.log(error);
+    console.log("🔥🔥🔥 EMAIL ERROR END 🔥🔥🔥");
+
+    res.status(500).json({
+      message: "Failed to send email",
+      error: error.message,
+    });
   }
 });
