@@ -11,6 +11,9 @@ import { useRouter } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useEffect, useState } from "react";
 import BASE_URL from "../config/api";
+import * as Location from "expo-location";
+import * as SMS from "expo-sms";
+import { Linking } from "react-native";
 
 export default function Dashboard() {
   const router = useRouter();
@@ -29,22 +32,63 @@ export default function Dashboard() {
   }, []);
 
   const handleSOS = async () => {
-    const email = await AsyncStorage.getItem("userEmail");
-    console.log("Cancel SOS called for:", email);
+    try {
+      const email = await AsyncStorage.getItem("userEmail");
 
-    const response = await fetch(
-      `${BASE_URL}/send-sos`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
+      // 1️⃣ Get location permission
+      const { status } = await Location.requestForegroundPermissionsAsync();
+
+      if (status !== "granted") {
+        Alert.alert("Permission Required", "Location permission is required for SOS.");
+        return;
       }
-    );
 
-    if (response.ok) {
-      router.push("/emergency");
-    } else {
-      alert("Failed to send emergency alert");
+      // 2️⃣ Get current location
+      const location = await Location.getCurrentPositionAsync({});
+      const lat = location.coords.latitude;
+      const lon = location.coords.longitude;
+
+      const mapLink = `https://www.google.com/maps?q=${lat},${lon}`;
+
+      // 3️⃣ Fetch trusted contacts from backend
+      const contactResponse = await fetch(`${BASE_URL}/getTrustedContacts/U101`);
+      const contacts = await contactResponse.json();
+
+      const numbers = contacts.map((c: any) => c.trusted_no);
+
+      const message =
+        `🚨 EMERGENCY ALERT 🚨\n\nI need help.\nMy live location:\n${mapLink}`;
+
+      // 4️⃣ Send SMS alert
+      const smsAvailable = await SMS.isAvailableAsync();
+
+      if (smsAvailable && numbers.length > 0) {
+        await SMS.sendSMSAsync(numbers, message);
+      }
+
+      // 5️⃣ Call first trusted contact
+      if (numbers.length > 0) {
+        Linking.openURL(`tel:${numbers[0]}`);
+      }
+
+      // 6️⃣ Send alert to backend (email notification)
+      await fetch(`${BASE_URL}/send-sos`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          email,
+          latitude: lat,
+          longitude: lon,
+        }),
+      });
+
+      Alert.alert("SOS Activated", "Emergency alert sent successfully.");
+
+    } catch (error) {
+      console.log(error);
+      Alert.alert("Error", "Failed to trigger SOS.");
     }
   };
 
@@ -195,12 +239,11 @@ export default function Dashboard() {
         <View style={styles.featureGrid}>
 
           <FeatureButton icon="group" label="Emergency Contacts" route="/contacts" />
-          <FeatureButton icon="person" label="Profile" route="/profile" />
           <FeatureButton icon="timer" label="Safety Timer" route="/safetimer" />
           <FeatureButton icon="location-on" label="Share Location" route="/safemap" />
           <FeatureButton icon="phone-in-talk" label="Fake Call" route="/fake-call" />
           <FeatureButton icon="call" label="Helpline Numbers" route="/helpline" />
-          <FeatureButton icon="verified-user" label="Trusted Circles" route="/circles" />
+          <FeatureButton icon="verified-user" label="Trusted Circles" route="/trustedCircles" />
           <FeatureButton icon="report" label="About" route="/report" />
           <FeatureButton icon="smart-toy" label="AI Guardian" route="/guardian" />
 

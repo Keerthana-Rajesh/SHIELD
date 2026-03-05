@@ -601,3 +601,43 @@ Please help immediately.
     });
   }
 });
+
+app.post("/addTrustedContact", (req, res) => {
+
+  const { user_id, trusted_name, trusted_no, relationship_type } = req.body;
+
+  const sql =
+    "INSERT INTO Trusted_Contact (user_id, trusted_name, trusted_no, relationship_type) VALUES (?, ?, ?, ?)";
+
+  db.query(
+    sql,
+    [user_id, trusted_name, trusted_no, relationship_type],
+    (err, result) => {
+
+      if (err) {
+        console.log(err);
+        return res.json({ success: false });
+      }
+
+      res.json({ success: true });
+    }
+  );
+});
+
+app.get("/getTrustedContacts/:user_id", (req, res) => {
+
+  const user_id = req.params.user_id;
+
+  const sql = "SELECT * FROM Trusted_Contact WHERE user_id = ?";
+
+  db.query(sql, [user_id], (err, result) => {
+
+    if (err) {
+      console.log(err);
+      return res.json([]);
+    }
+
+    res.json(result);
+
+  });
+});
