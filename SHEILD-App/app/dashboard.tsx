@@ -14,11 +14,60 @@ import BASE_URL from "../config/api";
 import * as Location from "expo-location";
 import { Linking, Platform, PermissionsAndroid } from "react-native";
 import haversine from 'haversine';
+import { addVolumeListener } from "react-native-volume-manager";
 import call from 'react-native-phone-call';
+import { fetchKeywords } from "../services/keywordService";
+import { DeviceEventEmitter } from "react-native";
+import EmergencyOverlay from "../components/EmergencyOverlay";
 
 export default function Dashboard() {
   const router = useRouter();
   const [menuVisible, setMenuVisible] = useState(false);
+  const [lowKeywords, setLowKeywords] = useState([]);
+  const [highKeywords, setHighKeywords] = useState([]);
+  const [overlayVisible, setOverlayVisible] = useState(false);
+
+  useEffect(() => {
+
+    const loadKeywords = async () => {
+      const userId = await AsyncStorage.getItem("userId");
+      if (userId) {
+        const data = await fetchKeywords(userId);
+
+        setLowKeywords(data.lowKeywords);
+        setHighKeywords(data.highKeywords);
+      }
+    };
+
+    loadKeywords();
+
+  }, []);
+
+  useEffect(() => {
+
+    const sub1 = DeviceEventEmitter.addListener("EMERGENCY_LISTENING_START", () => {
+      setOverlayVisible(true);
+    });
+
+    const sub2 = DeviceEventEmitter.addListener("EMERGENCY_LISTENING_STOP", () => {
+      setOverlayVisible(false);
+    });
+
+    return () => {
+      sub1.remove();
+      sub2.remove();
+    };
+
+  }, []);
+
+  const handleCancelListening = () => {
+    setOverlayVisible(false); // Instantly hide the overlay
+    DeviceEventEmitter.emit("EMERGENCY_LISTENING_CANCEL"); // Tell EmergencyMonitor to unlock mic
+  };
+
+  const startListeningMode = () => {
+    console.log("Emergency listening started");
+  };
 
   // 🔐 Protect Dashboard (redirect if not logged in)
   useEffect(() => {
@@ -326,6 +375,11 @@ export default function Dashboard() {
           onPress={() => router.push("/settings")}
         />
       </View>
+
+      <EmergencyOverlay
+        visible={overlayVisible}
+        onCancel={handleCancelListening}
+      />
 
     </View>
   );

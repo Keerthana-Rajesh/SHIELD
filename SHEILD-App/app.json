@@ -1,10 +1,10 @@
 {
   "expo": {
-    "name": "SHEILD-App",
-    "slug": "SHEILD-App",
+    "name": "SHEILD",
+    "slug": "SHEILD",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/icon.png",
     "scheme": "sheildapp",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
@@ -14,9 +14,9 @@
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+        "foregroundImage": "./assets/icon.png",
+        "backgroundImage": "./assets/icon.png",
+        "monochromeImage": "./assets/icon.png"
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
@@ -55,7 +55,14 @@
           "locationWhenInUsePermission": "Allow SHEILD to access your location for emergency detection."
         }
       ],
-      "expo-mail-composer"
+      "expo-mail-composer",
+      [
+        "@react-native-voice/voice",
+        {
+          "microphonePermission": "Allow SHIELD to access the microphone for emergency keywords.",
+          "speechRecognitionPermission": "Allow SHIELD to securely recognize emergency voice commands."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

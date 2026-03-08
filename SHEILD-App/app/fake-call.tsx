@@ -42,9 +42,9 @@ export default function FakeCallSetup() {
 
   const [recording, setRecording] =
     useState<Audio.Recording | null>(null);
-  const [selectedVoice, setSelectedVoice] = useState(
-    "Where are you? I'm outside."
-  );
+
+  const [customTTS, setCustomTTS] = useState("");
+  const [useTTS, setUseTTS] = useState(false);
 
   const previewSoundRef = useRef<Audio.Sound | null>(null);
   const durationIntervalRef =
@@ -107,6 +107,17 @@ export default function FakeCallSetup() {
       const data = await AsyncStorage.getItem("RECORDED_VOICES");
       if (data) {
         setSavedVoices(JSON.parse(data));
+      }
+
+      const savedTTS = await AsyncStorage.getItem("CUSTOM_TTS");
+      if (savedTTS) {
+        setCustomTTS(savedTTS);
+        setUseTTS(true);
+      }
+
+      const savedGender = await AsyncStorage.getItem("TTS_GENDER");
+      if (savedGender === "male" || savedGender === "female") {
+        setSelectedGender(savedGender);
       }
     };
 
@@ -437,19 +448,24 @@ export default function FakeCallSetup() {
   // Call Trigger
   // -----------------------------
   const triggerCall = () => {
-    const selectedVoice = savedVoices.find(v => v.isSelected);
+    let finalUri = "";
 
-    if (!selectedVoice) {
-      Alert.alert("Select a recorded voice first");
-      return;
+    if (!useTTS) {
+      const selectedVoiceObj = savedVoices.find(v => v.isSelected);
+      if (!selectedVoiceObj) {
+        Alert.alert("Select a recorded voice first, or use Custom TTS.");
+        return;
+      }
+      finalUri = selectedVoiceObj.uri;
     }
 
     router.push({
       pathname: "/incoming",
       params: {
         name: selectedCaller,
-        recordingUri: selectedVoice.uri,
+        recordingUri: finalUri,
         gender: selectedGender,
+        ttsText: useTTS ? customTTS : "",
       },
     });
   };
@@ -573,7 +589,10 @@ export default function FakeCallSetup() {
         <View style={styles.genderRow}>
           <TouchableOpacity
             style={[styles.genderPill, selectedGender === "male" && styles.genderPillActive]}
-            onPress={() => setSelectedGender("male")}
+            onPress={async () => {
+              setSelectedGender("male");
+              await AsyncStorage.setItem("TTS_GENDER", "male");
+            }}
           >
             <Text style={styles.genderIcon}>👨</Text>
             <Text style={[styles.genderLabel, selectedGender === "male" && styles.genderLabelActive]}>
@@ -582,7 +601,10 @@ export default function FakeCallSetup() {
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.genderPill, selectedGender === "female" && styles.genderPillActive]}
-            onPress={() => setSelectedGender("female")}
+            onPress={async () => {
+              setSelectedGender("female");
+              await AsyncStorage.setItem("TTS_GENDER", "female");
+            }}
           >
             <Text style={styles.genderIcon}>👩</Text>
             <Text style={[styles.genderLabel, selectedGender === "female" && styles.genderLabelActive]}>
@@ -599,8 +621,12 @@ export default function FakeCallSetup() {
         {voices.map((voice) => (
           <TouchableOpacity
             key={voice}
-            style={[styles.voiceCard, selectedVoice === voice && styles.voiceSelected]}
-            onPress={() => setSelectedVoice(voice)}
+            style={[styles.voiceCard, customTTS === voice && styles.voiceSelected]}
+            onPress={async () => {
+              setCustomTTS(voice);
+              setUseTTS(true);
+              await AsyncStorage.setItem("CUSTOM_TTS", voice);
+            }}
           >
             <Text style={styles.voiceText}>{voice}</Text>
           </TouchableOpacity>
@@ -610,7 +636,17 @@ export default function FakeCallSetup() {
         <TextInput
           placeholder="Custom Text-to-Speech"
           placeholderTextColor="#777"
-          style={styles.input}
+          style={[styles.input, useTTS && { borderColor: "#ec1313", borderWidth: 1 }]}
+          value={customTTS}
+          onChangeText={async (text) => {
+            setCustomTTS(text);
+            await AsyncStorage.setItem("CUSTOM_TTS", text);
+            if (text.trim().length > 0) {
+              setUseTTS(true);
+            } else {
+              setUseTTS(false);
+            }
+          }}
         />
 
         {/* RECORD YOUR VOICE */}
@@ -661,11 +697,14 @@ export default function FakeCallSetup() {
               </TouchableOpacity>
               {/* Select For Call */}
               <TouchableOpacity
-                onPress={() => selectVoice(voice.id)}
+                onPress={() => {
+                  selectVoice(voice.id);
+                  setUseTTS(false); // Disable TTS if they select a recording
+                }}
               >
                 <MaterialIcons
                   name={
-                    selectedVoiceId === voice.id
+                    selectedVoiceId === voice.id && !useTTS
                       ? "radio-button-checked"
                       : "radio-button-unchecked"
                   }

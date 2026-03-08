@@ -11,9 +11,13 @@ console.warn = (...args) => {
 };
 
 import { Stack } from "expo-router";
+import EmergencyMonitor from "../components/EmergencyMonitor";
 
 export default function Layout() {
   return (
-    <Stack screenOptions={{ headerShown: false }} />
+    <>
+      <EmergencyMonitor />
+      <Stack screenOptions={{ headerShown: false }} />
+    </>
   );
 }

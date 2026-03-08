@@ -1,0 +1,1 @@
+// Obsoleted. Listening logic moved directly to components/EmergencyMonitor.tsx for centralized state control

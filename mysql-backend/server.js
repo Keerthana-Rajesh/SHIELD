@@ -651,3 +651,30 @@ app.get("/getTrustedContacts/:user_id", (req, res) => {
 
   });
 });
+
+app.get("/keywords/:userId", async (req, res) => {
+
+  const { userId } = req.params;
+
+  const [rows] = await db.promise().query(
+    "SELECT keyword_text, security_level FROM emergency_keyword WHERE user_id = ?",
+    [userId]
+  );
+
+  const lowRisk = [];
+  const highRisk = [];
+
+  rows.forEach((row) => {
+    if (row.security_level === "LOW") {
+      lowRisk.push(row.keyword_text.toLowerCase());
+    } else {
+      highRisk.push(row.keyword_text.toLowerCase());
+    }
+  });
+
+  res.json({
+    lowRiskKeywords: lowRisk,
+    highRiskKeywords: highRisk
+  });
+
+});

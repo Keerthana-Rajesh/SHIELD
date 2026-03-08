@@ -11,6 +11,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "expo-router";
 import { useLocalSearchParams } from "expo-router";
 import { Audio } from "expo-av";
+import * as Speech from "expo-speech";
 
 export default function ActiveCall() {
   const router = useRouter();
@@ -19,67 +20,155 @@ export default function ActiveCall() {
   const callerName = (params.name as string) || "Unknown";
   const recordingUri = (params.recordingUri as string) || "";
   const gender = (params.gender as string) || "female";
-// 🔊 Sound reference (expo-av)
-const soundRef = useRef<Audio.Sound | null>(null);
-const [isPlaying, setIsPlaying] = useState(false);
+  const ttsText = (params.ttsText as string) || "";
+  // 🔊 Sound reference (expo-av)
+  const soundRef = useRef<Audio.Sound | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
 
-// ⏱ Call Timer
-useEffect(() => {
-  const interval = setInterval(() => {
-    setSeconds((prev) => prev + 1);
-  }, 1000);
+  // ⏱ Call Timer
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setSeconds((prev) => prev + 1);
+    }, 1000);
 
-  return () => clearInterval(interval);
-}, []);
-console.log("ActiveCall received URI:", recordingUri);
-// 🎙 Play recorded voice when call screen loads
+    return () => clearInterval(interval);
+  }, []);
+  console.log("ActiveCall received URI:", recordingUri);
+  const [ttsTrigger, setTtsTrigger] = useState(0);
 
-useEffect(() => {
-  if (!recordingUri) {
-    console.log("No recordingUri found");
-    return;
-  }
+  // 🎙 Effect for Custom TTS (Loops automatically via state trigger)
+  useEffect(() => {
+    if (!ttsText) return;
 
-  const playSound = async () => {
-    try {
-      console.log("Trying to play:", recordingUri);
+    let isCallActive = true;
+    console.log("Speaking TTS (Loop " + ttsTrigger + "):", ttsText);
 
-      // 🔥 HARD RESET AUDIO SESSION
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
-        playsInSilentModeIOS: true,
-        interruptionModeIOS: 1,
-        shouldDuckAndroid: false,
-        interruptionModeAndroid: 1,
-        playThroughEarpieceAndroid: false, // 🔥 MUST BE FALSE
-        staysActiveInBackground: false,
-      });
+    const playTTS = async () => {
+      // Must fetch inside to ensure array is populated before playing
+      const voices = await Speech.getAvailableVoicesAsync();
+      let selectedVoice: string | undefined;
 
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: recordingUri },
-        {
-          shouldPlay: true,
-          isLooping: true,
-          volume: 1.0,
+      if (gender === "male") {
+        // Find best match for male voice
+        const maleVoice = voices.find(
+          (v) =>
+            v.name.toLowerCase().includes("male") ||
+            v.identifier.toLowerCase().includes("male") ||
+            v.name.toLowerCase().includes("aaron") ||
+            v.name.toLowerCase().includes("daniel") ||
+            v.name.toLowerCase().includes("man") ||
+            v.name.toLowerCase().includes("guy")
+        );
+        if (maleVoice) selectedVoice = maleVoice.identifier;
+      } else {
+        const femaleVoice = voices.find(
+          (v) =>
+            v.name.toLowerCase().includes("female") ||
+            v.identifier.toLowerCase().includes("female") ||
+            v.name.toLowerCase().includes("samantha") ||
+            v.name.toLowerCase().includes("karen") ||
+            v.name.toLowerCase().includes("victoria") ||
+            v.name.toLowerCase().includes("woman") ||
+            v.name.toLowerCase().includes("girl")
+        );
+        if (femaleVoice) selectedVoice = femaleVoice.identifier;
+      }
+
+      console.log("Selected TTS Voice ID:", selectedVoice);
+
+      const voiceOptions: Speech.SpeechOptions = {
+        pitch: gender === "male" && !selectedVoice ? 0.25 : 1.1, // Radical pitch drop if definitely missing a male voice
+        rate: 0.85,
+        voice: selectedVoice,
+        onStart: () => {
+          if (isCallActive) setIsPlaying(true);
+        },
+        onDone: () => {
+          if (isCallActive) {
+            setIsPlaying(false);
+            // Wait 1.5 seconds, then trigger the next loop
+            setTimeout(() => {
+              if (isCallActive) setTtsTrigger((prev) => prev + 1);
+            }, 1500);
+          }
+        },
+        onStopped: () => {
+          if (isCallActive) setIsPlaying(false);
+        },
+        onError: (e) => {
+          console.log("TTS Error:", e);
+          if (isCallActive) {
+            setIsPlaying(false);
+            // Fallback trigger if Android TTS engine errors out
+            setTimeout(() => {
+              if (isCallActive) setTtsTrigger((prev) => prev + 1);
+            }, 2000);
+          }
+        },
+      };
+
+      if (!isCallActive) return;
+      Speech.speak(ttsText, voiceOptions);
+    };
+
+    playTTS();
+
+    return () => {
+      isCallActive = false;
+      Speech.stop();
+    };
+  }, [ttsText, gender, ttsTrigger]);
+
+  // 🎙 Effect for Recorded Audio (Loops natively via expo-av isLooping)
+  useEffect(() => {
+    if (ttsText || !recordingUri) return;
+
+    let isCallActive = true;
+
+    const playSound = async () => {
+      try {
+        console.log("Trying to play Recorded Audio:", recordingUri);
+
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: false,
+          playsInSilentModeIOS: true,
+          interruptionModeIOS: 1,
+          shouldDuckAndroid: false,
+          interruptionModeAndroid: 1,
+          playThroughEarpieceAndroid: false,
+          staysActiveInBackground: false,
+        });
+
+        const { sound } = await Audio.Sound.createAsync(
+          { uri: recordingUri },
+          {
+            shouldPlay: true,
+            isLooping: true, // Native looping
+            volume: 1.0,
+          }
+        );
+
+        if (isCallActive) {
+          soundRef.current = sound;
+          setIsPlaying(true);
+        } else {
+          sound.unloadAsync();
         }
-      );
+      } catch (error) {
+        console.log("Playback error:", error);
+      }
+    };
 
-      soundRef.current = sound;
+    playSound();
 
-    } catch (error) {
-      console.log("Playback error:", error);
-    }
-  };
-
-  playSound();
-
-  return () => {
-    if (soundRef.current) {
-      soundRef.current.unloadAsync();
-      soundRef.current = null;
-    }
-  };
-}, [recordingUri]);
+    return () => {
+      isCallActive = false;
+      if (soundRef.current) {
+        soundRef.current.unloadAsync();
+        soundRef.current = null;
+      }
+    };
+  }, [recordingUri, ttsText]);
 
 
   const formatTime = () => {
@@ -91,12 +180,13 @@ useEffect(() => {
   };
 
   const handleEndCall = async () => {
-  if (soundRef.current) {
-    await soundRef.current.unloadAsync();
-    soundRef.current = null;
-  }
-  router.back();
-};
+    Speech.stop();
+    if (soundRef.current) {
+      await soundRef.current.unloadAsync();
+      soundRef.current = null;
+    }
+    router.back();
+  };
 
   return (
     <View style={styles.container}>
@@ -113,7 +203,7 @@ useEffect(() => {
         <Text style={styles.timer}>{formatTime()}</Text>
 
         {/* Voice indicator badge */}
-        {recordingUri ? (
+        {(recordingUri || ttsText) ? (
           <View style={[styles.voiceBadge, isPlaying ? styles.voiceBadgeActive : styles.voiceBadgeInactive]}>
             <MaterialIcons
               name={isPlaying ? "volume-up" : "mic"}
@@ -121,7 +211,7 @@ useEffect(() => {
               color={isPlaying ? "#22c55e" : "#888"}
             />
             <Text style={[styles.voiceBadgeText, !isPlaying && { color: "#888" }]}>
-              {gender === "male" ? "👨 Male" : "👩 Female"} voice {isPlaying ? "playing" : "loading..."}
+              {gender === "male" ? "👨 Male" : "👩 Female"} {ttsText ? "TTS" : "voice"} {isPlaying ? "playing" : "loading..."}
             </Text>
           </View>
         ) : null}
