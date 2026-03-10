@@ -19,6 +19,7 @@ import call from 'react-native-phone-call';
 import { fetchKeywords } from "../services/keywordService";
 import { DeviceEventEmitter } from "react-native";
 import EmergencyOverlay from "../components/EmergencyOverlay";
+import * as IntentLauncher from 'expo-intent-launcher';
 
 export default function Dashboard() {
   const router = useRouter();
@@ -146,27 +147,19 @@ export default function Dashboard() {
               );
 
               if (granted === PermissionsAndroid.RESULTS.GRANTED) {
-                console.log('CALL_PHONE permission granted. Dialing bypassing overlay...');
-                const args = {
-                  number: closestContact.phone,
-                  prompt: false, // Bypass the prompt to dial directly
-                };
-                call(args).catch(() => { Linking.openURL(`tel:${closestContact.phone}`); });
+                console.log('CALL_PHONE permission granted. Dialing directly...');
+                IntentLauncher.startActivityAsync('android.intent.action.CALL', {
+                  data: `tel:${closestContact.phone}`
+                }).catch((e) => { console.log("Call failed", e) });
               } else {
-                console.log('CALL_PHONE permission denied. Falling back to dialer.');
-                Linking.openURL(`tel:${closestContact.phone}`);
+                console.log('CALL_PHONE permission denied.');
               }
             } catch (err) {
               console.warn(err);
-              Linking.openURL(`tel:${closestContact.phone}`);
             }
           } else {
-            // For iOS or other platforms, we might fallback to prompt dialer, or handle appropriately
-            const args = {
-              number: closestContact.phone,
-              prompt: false, // react-native-phone-call has custom iOS implementation, but usually iOS forces a prompt
-            };
-            call(args).catch(() => { Linking.openURL(`tel:${closestContact.phone}`); });
+            // iOS is restricted, but the user is on Android so it's fine
+            console.log("iOS background calling is restricted.");
           }
         }
       }
@@ -184,11 +177,10 @@ export default function Dashboard() {
         }),
       });
 
-      Alert.alert("SOS Activated", "Emergency alert sent successfully.");
+      console.log("Emergency alert sent successfully.");
 
     } catch (error) {
-      console.log(error);
-      Alert.alert("Error", "Failed to trigger SOS.");
+      console.log("Failed to trigger SOS.", error);
     }
   };
 

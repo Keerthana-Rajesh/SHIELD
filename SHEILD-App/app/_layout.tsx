@@ -1,4 +1,15 @@
+import React, { useEffect } from "react";
 import { LogBox } from "react-native";
+import ReactNativeForegroundService from "@supersami/rn-foreground-service";
+
+ReactNativeForegroundService.register({
+  config: {
+    alert: false,
+    onServiceErrorCallBack: function () {
+      console.warn("Foreground service error");
+    },
+  },
+});
 
 LogBox.ignoreLogs(["[expo-av]: Expo AV has been deprecated"]);
 
@@ -14,6 +25,23 @@ import { Stack } from "expo-router";
 import EmergencyMonitor from "../components/EmergencyMonitor";
 
 export default function Layout() {
+  useEffect(() => {
+    try {
+      ReactNativeForegroundService.start({
+        id: 114,
+        title: "SHIELD Guardian Active",
+        message: "Listening for volume triggers and shakes.",
+        icon: "ic_launcher",
+        button: false,
+        button2: false,
+        setOnlyAlertOnce: "true",
+        color: "#ec1313",
+      });
+    } catch (e) {
+      console.log("Foreground Service errored: ", e);
+    }
+  }, []);
+
   return (
     <>
       <EmergencyMonitor />
