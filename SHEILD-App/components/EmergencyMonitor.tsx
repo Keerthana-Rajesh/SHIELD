@@ -257,18 +257,21 @@ export default function EmergencyMonitor() {
         try {
             const email = await AsyncStorage.getItem("userEmail");
 
-            // 1. Get Location
-            const { status } = await Location.requestForegroundPermissionsAsync();
-            if (status !== 'granted') return;
-            let lat = 0;
-            let lon = 0;
+            // 1. Try to get location — NEVER abort if it fails
+            let lat: number | null = null;
+            let lon: number | null = null;
             try {
-               const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-               console.log("User Location:", loc.coords);
-               lat = loc.coords.latitude;
-               lon = loc.coords.longitude;
+                const { status } = await Location.requestForegroundPermissionsAsync();
+                if (status === 'granted') {
+                    const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+                    console.log("User Location:", loc.coords);
+                    lat = loc.coords.latitude;
+                    lon = loc.coords.longitude;
+                } else {
+                    console.log("Location permission not granted — continuing without location.");
+                }
             } catch (err) {
-               console.log("Location fetch failed, proceeding with fallback", err);
+                console.log("Location fetch failed, proceeding without location:", err);
             }
 
             if (email) {
@@ -283,7 +286,7 @@ export default function EmergencyMonitor() {
                         let minDistance = Infinity;
 
                         contacts.forEach((c: any) => {
-                            if (c.latitude && c.longitude) {
+                            if (lat !== null && lon !== null && c.latitude && c.longitude) {
                                 const distance = haversine(
                                     { latitude: lat, longitude: lon },
                                     { latitude: parseFloat(c.latitude), longitude: parseFloat(c.longitude) }
@@ -328,12 +331,17 @@ export default function EmergencyMonitor() {
                     }
 
                     // 4. Send alert to backend
-                    await fetch(`${BASE_URL}/send-sos`, {
+                    const sosRes = await fetch(`${BASE_URL}/send-sos`, {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ email, latitude: lat, longitude: lon }),
                     });
-                    console.log("Email alerts sent out successfully.");
+                    const sosData = await sosRes.json();
+                    if (sosRes.ok) {
+                        console.log("✅ Email alerts sent out successfully:", sosData.message);
+                    } else {
+                        console.log("❌ SOS email failed:", sosData.message);
+                    }
                 }
             }
         } catch (error) {
