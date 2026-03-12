@@ -2,12 +2,34 @@ const express = require("express");
 const mysql = require("mysql2");
 const cors = require("cors");
 const nodemailer = require("nodemailer");
-require("dotenv").config()
+const multer = require("multer");
+const cloudinary = require("cloudinary").v2;
+const fs = require("fs");
+const path = require("path");
+require("dotenv").config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
+
+/* ================================
+   🔹 CLOUDINARY CONFIGURATION
+================================ */
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
+// Multer — stores uploaded file to disk temporarily
+const tmpDir = path.join(__dirname, "tmp_uploads");
+if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir);
+
+const upload = multer({
+  dest: tmpDir,
+  limits: { fileSize: 500 * 1024 * 1024 }, // 500MB cap
+});
 
 /* ================================
    🔹 MySQL Connection Pool
@@ -678,3 +700,131 @@ app.get("/keywords/:userId", async (req, res) => {
   });
 
 });
+
+/* ===================================================
+   🔹 UPLOAD RECORDING → CLOUDINARY → DB → SOS EMAIL
+=================================================== */
+app.post("/upload-recording", upload.single("file"), async (req, res) => {
+  const { email, type, location } = req.body;
+  const file = req.file;
+
+  if (!file) return res.status(400).json({ message: "No file uploaded" });
+
+  const filePath = file.path;
+  let cloudinaryUrl = "";
+
+  try {
+    // ── 1. Upload to Cloudinary ──
+    console.log("☁️ Uploading to Cloudinary:", file.originalname || file.filename);
+    const uploadResult = await cloudinary.uploader.upload(filePath, {
+      resource_type: type === "video" ? "video" : "auto",
+      folder: "emergency-recordings",
+      public_id: `emergency_${type}_${Date.now()}`,
+    });
+
+    cloudinaryUrl = uploadResult.secure_url;
+    console.log("✅ Cloudinary URL:", cloudinaryUrl);
+
+    // Delete temp file
+    fs.unlink(filePath, () => {});
+
+    // ── 2. Get user from DB ──
+    const [userRows] = await db.promise().query(
+      "SELECT id, name FROM users WHERE email = ?", [email]
+    );
+    if (userRows.length === 0) return res.status(404).json({ message: "User not found" });
+
+    const userId = userRows[0].id;
+    const userName = userRows[0].name;
+
+    // ── 3. Save URL to emergency_recordings ──
+    await db.promise().query(
+      `INSERT INTO emergency_recordings (user_id, type, url, filename, recorded_at)
+       VALUES (?, ?, ?, ?, NOW())`,
+      [userId, type, cloudinaryUrl, `emergency_${type}_${Date.now()}`]
+    );
+    console.log("✅ Recording URL saved to DB");
+
+    // ── 4. Get trusted contacts ──
+    const [contacts] = await db.promise().query(
+      "SELECT contact_email FROM contacts WHERE user_id = ? AND contact_email IS NOT NULL AND contact_email != ''",
+      [userId]
+    );
+
+    if (contacts.length > 0) {
+      const recipients = contacts.map(c => c.contact_email).filter(Boolean);
+
+      const transporter = nodemailer.createTransport({
+        service: "gmail",
+        auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS },
+      });
+
+      const locationHtml = location && location !== "Location unavailable"
+        ? `<p>📍 <a href="${location}" style="color:#ec1313">View Live Location on Google Maps</a></p>`
+        : "";
+
+      const typeLabel = type === "video" ? "Video" : "Audio";
+      const typeIcon  = type === "video" ? "📹" : "🎙️";
+
+      // ── 5. Send rich HTML SOS email ──
+      await transporter.sendMail({
+        from: `"SHIELD Emergency" <${process.env.EMAIL_USER}>`,
+        to: recipients,
+        subject: "🚨 HIGH RISK ALERT - SHIELD",
+        html: `
+          <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;border:2px solid #ec1313;border-radius:12px;overflow:hidden">
+            <div style="background:#ec1313;padding:20px;text-align:center">
+              <h1 style="color:#fff;margin:0;font-size:22px">🚨 HIGH RISK EMERGENCY ALERT</h1>
+            </div>
+            <div style="padding:24px;background:#1a0f0f;color:#fff">
+              <p style="font-size:16px"><strong>${userName}</strong> has triggered a HIGH RISK emergency alert via the SHIELD safety app.</p>
+              ${locationHtml}
+              <p>${typeIcon} Emergency ${typeLabel} Recording:<br/>
+                <a href="${cloudinaryUrl}" style="color:#ec1313;word-break:break-all">${cloudinaryUrl}</a>
+              </p>
+              <p style="background:rgba(236,19,19,0.1);border-left:4px solid #ec1313;padding:12px;border-radius:4px">
+                ⚠️ Please contact them <strong>IMMEDIATELY</strong> and alert local authorities if necessary.
+              </p>
+            </div>
+            <div style="background:#2a1b1b;padding:12px;text-align:center">
+              <p style="color:#888;font-size:11px;margin:0">Sent automatically by SHIELD Safety App</p>
+            </div>
+          </div>
+        `,
+      });
+      console.log("✅ HIGH RISK SOS email sent to:", recipients);
+    } else {
+      console.log("⚠️ No trusted contacts found — SOS email not sent");
+    }
+
+    res.json({ message: "Recording uploaded and SOS sent", cloudinaryUrl });
+
+  } catch (err) {
+    // Always clean up temp file
+    if (filePath) fs.unlink(filePath, () => {});
+    console.error("Upload Recording Error:", err);
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
+});
+
+/* ================================
+   🔹 GET RECORDINGS FOR USER
+================================ */
+app.get("/recordings/:email", async (req, res) => {
+  const { email } = req.params;
+  try {
+    const [userRows] = await db.promise().query(
+      "SELECT id FROM users WHERE email = ?", [email]
+    );
+    if (userRows.length === 0) return res.status(404).json({ message: "User not found" });
+
+    const [rows] = await db.promise().query(
+      "SELECT * FROM emergency_recordings WHERE user_id = ? ORDER BY recorded_at DESC",
+      [userRows[0].id]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error("Get Recordings Error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});

@@ -1,13 +1,20 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Alert, DeviceEventEmitter, Platform, PermissionsAndroid, Modal, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import {
+    View, Alert, DeviceEventEmitter, Platform, PermissionsAndroid,
+    Modal, Text, TouchableOpacity, StyleSheet, AppState, AppStateStatus
+} from 'react-native';
 import { VolumeManager } from 'react-native-volume-manager';
 import Voice from '@react-native-voice/voice';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import { Audio } from 'expo-av';
+import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
+import * as FileSystem from 'expo-file-system';
+// Firebase Storage removed — using Cloudinary via backend /upload-recording
 import haversine from 'haversine';
 import BASE_URL from '../config/api';
 import * as IntentLauncher from 'expo-intent-launcher';
+import { MaterialIcons } from '@expo/vector-icons';
 
 export default function EmergencyMonitor() {
     const [isListening, setIsListening] = useState(false);
@@ -15,7 +22,7 @@ export default function EmergencyMonitor() {
     const [lowRiskKeywords, setLowRiskKeywords] = useState<string[]>([]);
     const [highRiskKeywords, setHighRiskKeywords] = useState<string[]>([]);
 
-    // We use refs to avoid dependency loops in listeners
+    // Refs to avoid dependency loops
     const keywordsRef = useRef<{ low: string[], high: string[] }>({ low: [], high: [] });
     const listeningRef = useRef(false);
     const volumeHistory = useRef<number[]>([]);
@@ -24,8 +31,25 @@ export default function EmergencyMonitor() {
     const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const lastShakeTime = useRef<number>(0);
 
-    const [showWarning, setShowWarning] = useState(false);
-    const [countdown, setCountdown] = useState(5);
+    // LOW RISK modal state
+    const [showLowWarning, setShowLowWarning] = useState(false);
+    const [lowCountdown, setLowCountdown] = useState(5);
+
+    // HIGH RISK modal + recording state
+    const [showHighWarning, setShowHighWarning] = useState(false);
+    const [highCountdown, setHighCountdown] = useState(8);
+    const highCancelTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const highTimerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+    // Camera recording
+    const [showCamera, setShowCamera] = useState(false);
+    const [cameraFacing, setCameraFacing] = useState<CameraType>('back');
+    const [isRecording, setIsRecording] = useState(false);
+    const [uploadStatus, setUploadStatus] = useState('');
+    const cameraRef = useRef<CameraView | null>(null);
+    const videoRecordingRef = useRef<boolean>(false);
+    const audioRecordingRef = useRef<Audio.Recording | null>(null);
+    const [cameraPermission, requestCameraPermission] = useCameraPermissions();
 
     useEffect(() => {
         setup();
@@ -35,26 +59,18 @@ export default function EmergencyMonitor() {
             cancelSub.remove();
             Voice.destroy()
                 .then(() => {
-                    try {
-                        Voice.removeAllListeners();
-                    } catch (e) {
-                        // ignore null reference error if native module is not linked
-                    }
+                    try { Voice.removeAllListeners(); } catch (e) { }
                 })
                 .catch(() => { });
         };
     }, []);
 
     const setup = async () => {
-        // 1. Get User
         const id = await AsyncStorage.getItem("userId");
         setUserId(id);
-        if (id) {
-            // 2. Fetch Keywords
-            await fetchKeywords(id);
-        }
+        if (id) await fetchKeywords(id);
 
-        // 3. Setup Voice
+        // Voice listeners
         Voice.onSpeechResults = onSpeechResults;
         Voice.onSpeechPartialResults = onSpeechResults;
         Voice.onSpeechError = (e) => {
@@ -66,7 +82,6 @@ export default function EmergencyMonitor() {
             });
         };
         Voice.onSpeechEnd = () => {
-            console.log('Speech Ended Environmentally');
             DeviceEventEmitter.emit("EMERGENCY_LISTENING_CANCEL");
             Voice.destroy().then(() => {
                 listeningRef.current = false;
@@ -74,24 +89,18 @@ export default function EmergencyMonitor() {
             });
         };
 
-        // 4. Setup Volume Listener
-        const volumeListener = VolumeManager.addVolumeListener((result) => {
-            // Very basic "long press" simulation: rapid continuous volume events
+        // Volume button trigger
+        const volumeListener = VolumeManager.addVolumeListener(() => {
             const now = Date.now();
             volumeHistory.current.push(now);
-
-            // Keep only last 3 seconds of events
             volumeHistory.current = volumeHistory.current.filter(t => now - t < 3000);
-
-            // If we receive 3+ volume change events within 3 seconds, consider it a long press trigger
             if (volumeHistory.current.length >= 3 && !listeningRef.current) {
-                volumeHistory.current = []; // reset
-                Alert.alert("Debug", "Volume sequence detected! Starting SHIELD...");
+                volumeHistory.current = [];
                 activateEmergencyListening();
             }
         });
 
-        // 5. Setup Shake Listener (safe: expo-sensors may not be available in Expo Go)
+        // Shake detection (safe — fails silently in Expo Go)
         let shakeListener: { remove: () => void } | null = null;
         try {
             const { Accelerometer } = require('expo-sensors');
@@ -107,9 +116,8 @@ export default function EmergencyMonitor() {
                     }
                 }
             });
-            console.log('Shake detection active.');
         } catch (e) {
-            console.log('Shake detection unavailable (native module missing):', e);
+            console.log('Shake detection unavailable:', e);
         }
 
         return () => {
@@ -127,13 +135,17 @@ export default function EmergencyMonitor() {
             const dataLow = await resLow.json();
             const dataHigh = await resHigh.json();
 
-            const lowList = Array.isArray(dataLow) ? dataLow.map((k: any) => k.keyword_text.toLowerCase()).filter((k: string) => k.trim().length > 0) : [];
-            const highList = Array.isArray(dataHigh) ? dataHigh.map((k: any) => k.keyword_text.toLowerCase()).filter((k: string) => k.trim().length > 0) : [];
+            const lowList = Array.isArray(dataLow)
+                ? dataLow.map((k: any) => k.keyword_text.toLowerCase()).filter((k: string) => k.trim().length > 0)
+                : [];
+            const highList = Array.isArray(dataHigh)
+                ? dataHigh.map((k: any) => k.keyword_text.toLowerCase()).filter((k: string) => k.trim().length > 0)
+                : [];
 
             setLowRiskKeywords(lowList);
             setHighRiskKeywords(highList);
             keywordsRef.current = { low: lowList, high: highList };
-            console.log('Emergency Monitor loaded keywords:', keywordsRef.current);
+            console.log('Keywords loaded:', keywordsRef.current);
         } catch (error) {
             console.log('Error fetching keywords:', error);
         }
@@ -155,20 +167,13 @@ export default function EmergencyMonitor() {
             DeviceEventEmitter.emit("EMERGENCY_LISTENING_START");
             await Voice.start('en-US');
 
-            if (listeningTimeoutRef.current) {
-                clearTimeout(listeningTimeoutRef.current);
-            }
-
+            if (listeningTimeoutRef.current) clearTimeout(listeningTimeoutRef.current);
             listeningTimeoutRef.current = setTimeout(() => {
-                if (listeningRef.current) {
-                    console.log("10 seconds elapsed. Stopping emergency listening.");
-                    stopListening();
-                }
+                if (listeningRef.current) stopListening();
             }, 10000);
 
         } catch (e: any) {
             console.error("Voice Error: ", e);
-            Alert.alert("Microphone Error", "Failed to start listening: " + (e.message || "Unknown error"));
             listeningRef.current = false;
             setIsListening(false);
             DeviceEventEmitter.emit("EMERGENCY_LISTENING_STOP");
@@ -177,11 +182,9 @@ export default function EmergencyMonitor() {
 
     const onSpeechResults = (e: any) => {
         const results = e.value as string[];
+        if (!results || results.length === 0) return;
         console.log("Detecting speech:", results);
 
-        if (!results || results.length === 0) return;
-
-        // Check all possible transcript results
         const isHighRisk = results.some(res =>
             keywordsRef.current.high.some(kw => res.toLowerCase().includes(kw))
         );
@@ -210,7 +213,6 @@ export default function EmergencyMonitor() {
                 clearTimeout(listeningTimeoutRef.current);
                 listeningTimeoutRef.current = null;
             }
-
             listeningRef.current = false;
             setIsListening(false);
             DeviceEventEmitter.emit("EMERGENCY_LISTENING_STOP");
@@ -221,26 +223,25 @@ export default function EmergencyMonitor() {
         }
     };
 
+    // ─────────────────────────── LOW RISK ───────────────────────────
+
     const handleLowRisk = () => {
-        setShowWarning(true);
-        setCountdown(5);
+        setShowLowWarning(true);
+        setLowCountdown(5);
 
         if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
         if (cancelTimeoutRef.current) clearTimeout(cancelTimeoutRef.current);
 
         timerIntervalRef.current = setInterval(() => {
-            setCountdown((prev) => {
-                if (prev <= 1) {
-                    clearInterval(timerIntervalRef.current!);
-                    return 0;
-                }
+            setLowCountdown(prev => {
+                if (prev <= 1) { clearInterval(timerIntervalRef.current!); return 0; }
                 return prev - 1;
             });
         }, 1000);
 
         cancelTimeoutRef.current = setTimeout(() => {
             clearInterval(timerIntervalRef.current!);
-            setShowWarning(false);
+            setShowLowWarning(false);
             executeLowRiskAction();
         }, 5000);
     };
@@ -248,34 +249,29 @@ export default function EmergencyMonitor() {
     const cancelLowRiskAlert = () => {
         if (cancelTimeoutRef.current) clearTimeout(cancelTimeoutRef.current);
         if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
-        setShowWarning(false);
+        setShowLowWarning(false);
     };
 
     const executeLowRiskAction = async () => {
         console.log("Executing LOW RISK action...");
-
         try {
             const email = await AsyncStorage.getItem("userEmail");
 
-            // 1. Try to get location — NEVER abort if it fails
+            // Location — never abort if it fails
             let lat: number | null = null;
             let lon: number | null = null;
             try {
                 const { status } = await Location.requestForegroundPermissionsAsync();
                 if (status === 'granted') {
                     const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-                    console.log("User Location:", loc.coords);
                     lat = loc.coords.latitude;
                     lon = loc.coords.longitude;
-                } else {
-                    console.log("Location permission not granted — continuing without location.");
                 }
             } catch (err) {
-                console.log("Location fetch failed, proceeding without location:", err);
+                console.log("Location fetch failed:", err);
             }
 
             if (email) {
-                // 2. Fetch contacts
                 const contactResponse = await fetch(`${BASE_URL}/contacts/${email}`);
                 if (contactResponse.ok) {
                     const data = await contactResponse.json();
@@ -284,64 +280,37 @@ export default function EmergencyMonitor() {
                     if (contacts.length > 0) {
                         let closestContact = contacts[0];
                         let minDistance = Infinity;
-
                         contacts.forEach((c: any) => {
                             if (lat !== null && lon !== null && c.latitude && c.longitude) {
-                                const distance = haversine(
+                                const d = haversine(
                                     { latitude: lat, longitude: lon },
                                     { latitude: parseFloat(c.latitude), longitude: parseFloat(c.longitude) }
                                 );
-                                if (distance < minDistance) {
-                                    minDistance = distance;
-                                    closestContact = c;
-                                }
+                                if (d < minDistance) { minDistance = d; closestContact = c; }
                             }
                         });
 
-                        if (closestContact?.phone) {
-                            console.log("Calling closest contact: ", closestContact.phone);
-
-                            if (Platform.OS === 'android') {
-                                try {
-                                    const granted = await PermissionsAndroid.request(
-                                        PermissionsAndroid.PERMISSIONS.CALL_PHONE,
-                                        {
-                                            title: 'Emergency Call Permission',
-                                            message: 'SHIELD needs access to make automatic emergency calls.',
-                                            buttonNeutral: 'Ask Me Later',
-                                            buttonNegative: 'Cancel',
-                                            buttonPositive: 'OK',
-                                        }
-                                    );
-
-                                    if (granted === PermissionsAndroid.RESULTS.GRANTED) {
-                                        IntentLauncher.startActivityAsync('android.intent.action.CALL', {
-                                            data: `tel:${closestContact.phone}`
-                                        }).catch((e) => { console.log("Call failed", e) });
-                                    } else {
-                                        console.log('CALL_PHONE permission denied.');
-                                    }
-                                } catch (err) {
-                                    console.warn(err);
+                        if (closestContact?.phone && Platform.OS === 'android') {
+                            try {
+                                const granted = await PermissionsAndroid.request(
+                                    PermissionsAndroid.PERMISSIONS.CALL_PHONE
+                                );
+                                if (granted === PermissionsAndroid.RESULTS.GRANTED) {
+                                    IntentLauncher.startActivityAsync('android.intent.action.CALL', {
+                                        data: `tel:${closestContact.phone}`
+                                    }).catch(e => console.log("Call failed", e));
                                 }
-                            } else {
-                                console.log("iOS background calling is restricted.");
-                            }
+                            } catch (err) { console.warn(err); }
                         }
                     }
 
-                    // 4. Send alert to backend
                     const sosRes = await fetch(`${BASE_URL}/send-sos`, {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ email, latitude: lat, longitude: lon }),
                     });
                     const sosData = await sosRes.json();
-                    if (sosRes.ok) {
-                        console.log("✅ Email alerts sent out successfully:", sosData.message);
-                    } else {
-                        console.log("❌ SOS email failed:", sosData.message);
-                    }
+                    console.log(sosRes.ok ? "✅ LOW RISK emails sent:" : "❌ LOW RISK SOS failed:", sosData.message);
                 }
             }
         } catch (error) {
@@ -349,111 +318,418 @@ export default function EmergencyMonitor() {
         }
     };
 
-    const handleHighRisk = async () => {
-        Alert.alert("HIGH RISK DETECTED", "Initiating Video/Audio recording and alerting contacts...");
+    // ─────────────────────────── HIGH RISK ───────────────────────────
 
-        // 1. Location
-        const { status: locStatus } = await Location.requestForegroundPermissionsAsync();
-        let locationStr = "Unknown location";
-        if (locStatus === 'granted') {
-            const loc = await Location.getCurrentPositionAsync({});
-            locationStr = `${loc.coords.latitude}, ${loc.coords.longitude}`;
-        }
+    const handleHighRisk = () => {
+        console.log("🔴 HIGH RISK KEYWORD DETECTED");
+        setShowHighWarning(true);
+        setHighCountdown(8);
 
-        // 2. Start Recording (Covertly)
-        // Audio recording is easier to do silently via expo-av
-        startCovertRecording(locationStr);
+        if (highTimerIntervalRef.current) clearInterval(highTimerIntervalRef.current);
+        if (highCancelTimeoutRef.current) clearTimeout(highCancelTimeoutRef.current);
+
+        highTimerIntervalRef.current = setInterval(() => {
+            setHighCountdown(prev => {
+                if (prev <= 1) { clearInterval(highTimerIntervalRef.current!); return 0; }
+                return prev - 1;
+            });
+        }, 1000);
+
+        // After 8 seconds, if not cancelled → start recording
+        highCancelTimeoutRef.current = setTimeout(() => {
+            clearInterval(highTimerIntervalRef.current!);
+            setShowHighWarning(false);
+            startHighRiskRecording();
+        }, 8000);
     };
 
-    const startCovertRecording = async (locationStr: string) => {
-        try {
-            await Audio.requestPermissionsAsync();
-            await Audio.setAudioModeAsync({
-                allowsRecordingIOS: true,
-                playsInSilentModeIOS: true,
-            });
+    const cancelHighRiskAlert = () => {
+        if (highCancelTimeoutRef.current) clearTimeout(highCancelTimeoutRef.current);
+        if (highTimerIntervalRef.current) clearInterval(highTimerIntervalRef.current);
+        setShowHighWarning(false);
+        console.log("⛔ High risk recording cancelled by user.");
+    };
 
+    const startHighRiskRecording = async () => {
+        console.log("📹 Starting high risk video + audio recording...");
+
+        // Request all permissions
+        if (!cameraPermission?.granted) {
+            const result = await requestCameraPermission();
+            if (!result.granted) {
+                console.log("Camera permission denied.");
+                // Fall back to audio-only
+                startAudioOnlyRecording();
+                return;
+            }
+        }
+
+        await Audio.requestPermissionsAsync();
+        await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+
+        // Show hidden camera view for recording
+        setCameraFacing('back');
+        setShowCamera(true);
+        setIsRecording(true);
+        setUploadStatus('Recording...');
+    };
+
+    // Called from CameraView once it's mounted and ready
+    const startVideoCapture = async () => {
+        if (!cameraRef.current || videoRecordingRef.current) return;
+        videoRecordingRef.current = true;
+
+        try {
+            console.log("▶️ Video recording started");
+
+            // Record 30 seconds of video (adjust as needed)
+            const videoPromise = cameraRef.current.recordAsync({
+                maxDuration: 30,
+            } as any);
+
+            // Switch camera if it looks dark after 3 seconds
+            setTimeout(async () => {
+                if (videoRecordingRef.current) {
+                    console.log("Checking if camera is blank — switching to front camera");
+                    setCameraFacing(prev => prev === 'back' ? 'front' : 'back');
+                }
+            }, 3000);
+
+            const videoResult = await videoPromise;
+
+            if (videoResult && videoResult.uri) {
+                console.log("✅ Video saved at:", videoResult.uri);
+                setUploadStatus('Uploading to Cloudinary...');
+                await uploadToCloudinary(videoResult.uri, 'video');
+            }
+        } catch (err) {
+            console.error("Video recording error:", err);
+            // Fall back to audio only
+            startAudioOnlyRecording();
+        } finally {
+            videoRecordingRef.current = false;
+            setIsRecording(false);
+            setShowCamera(false);
+        }
+    };
+
+    const stopVideoRecording = () => {
+        if (cameraRef.current && videoRecordingRef.current) {
+            cameraRef.current.stopRecording();
+        }
+    };
+
+    const startAudioOnlyRecording = async () => {
+        console.log("🎙️ Starting audio-only recording as fallback...");
+        try {
+            await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
             const recording = new Audio.Recording();
+            audioRecordingRef.current = recording;
             await recording.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
             await recording.startAsync();
 
-            console.log("Covert recording started...");
-
-            // Record for 10 seconds then upload (for demonstration of the flow)
             setTimeout(async () => {
                 await recording.stopAndUnloadAsync();
                 const uri = recording.getURI();
-                console.log("Covert recording saved at:", uri);
-
-                // Next step: Upload to Firebase
-                // Since firebase isn't initialized here perfectly, we stub the upload
-                console.log("Uploading to cloud storage...");
-                const fakeCloudUrl = "https://firebasestorage.googleapis.com/v0/b/example/audio.m4a";
-
-                Alert.alert("Emergency Complete", `Alert sent with Location: ${locationStr}\nAudio Evidence: ${fakeCloudUrl}`);
-            }, 10000);
-
+                if (uri) {
+                    setUploadStatus('Uploading audio to Cloudinary...');
+                    await uploadToCloudinary(uri, 'audio');
+                }
+                setIsRecording(false);
+            }, 30000);
         } catch (err) {
-            console.error('Failed to start covert recording', err);
+            console.error("Audio recording error:", err);
+            setIsRecording(false);
         }
     };
 
+    /**
+     * uploadToCloudinary
+     * Sends the recorded file to the backend /upload-recording endpoint as
+     * multipart/form-data. The backend uploads to Cloudinary, saves the
+     * secure_url to MySQL (emergency_recordings table), and emails all trusted
+     * contacts with the recording link — all in one atomic request.
+     */
+    const uploadToCloudinary = async (localUri: string, type: 'video' | 'audio') => {
+        try {
+            const email = await AsyncStorage.getItem("userEmail");
+            if (!email) {
+                console.warn("⚠️ No user email found — cannot upload recording");
+                setUploadStatus('Upload failed: not logged in');
+                return;
+            }
+
+            const extension = type === 'video' ? 'mp4' : 'm4a';
+            const mimeType  = type === 'video' ? 'video/mp4' : 'audio/m4a';
+            const fileName  = `emergency_${type}_${Date.now()}.${extension}`;
+
+            // Verify the file actually exists on device
+            const fileInfo = await FileSystem.getInfoAsync(localUri);
+            if (!fileInfo.exists) throw new Error("Recorded file not found on device");
+
+            // Get location for the SOS email
+            const locationStr = await getLocationString();
+
+            // Build FormData — React Native's fetch supports multipart natively
+            const formData = new FormData();
+            formData.append('file', {
+                uri: localUri,
+                name: fileName,
+                type: mimeType,
+            } as any);
+            formData.append('email', email);
+            formData.append('type', type);
+            formData.append('location', locationStr);
+
+            console.log(`☁️ Sending ${type} to backend for Cloudinary upload...`);
+            const response = await fetch(`${BASE_URL}/upload-recording`, {
+                method: 'POST',
+                body: formData,
+                // NOTE: Do NOT set Content-Type manually — fetch sets the correct
+                // multipart boundary automatically when body is FormData.
+            });
+
+            const data = await response.json();
+
+            if (response.ok) {
+                console.log("✅ Cloudinary upload succeeded:", data.cloudinaryUrl);
+                setUploadStatus('✅ Upload complete!');
+            } else {
+                console.error("❌ Backend upload error:", data.message);
+                setUploadStatus('Upload failed');
+            }
+
+        } catch (err) {
+            console.error("uploadToCloudinary error:", err);
+            setUploadStatus('Upload failed');
+        }
+    };
+
+    const getLocationString = async (): Promise<string> => {
+        try {
+            const { status } = await Location.requestForegroundPermissionsAsync();
+            if (status === 'granted') {
+                const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+                return `https://www.google.com/maps?q=${loc.coords.latitude},${loc.coords.longitude}`;
+            }
+        } catch (_) { }
+        return 'Location unavailable';
+    };
+
+    // ─────────────────────────── RENDER ───────────────────────────
+
     return (
-        <Modal visible={showWarning} transparent animationType="fade">
-            <View style={styles.modalOverlay}>
-                <View style={styles.modalContent}>
-                    <Text style={styles.modalTitle}>LOW RISK DETECTED</Text>
-                    <Text style={styles.modalText}>Alerting contacts in {countdown} seconds...</Text>
-                    <TouchableOpacity style={styles.cancelBtn} onPress={cancelLowRiskAlert}>
-                        <Text style={styles.cancelBtnText}>DISABLE</Text>
-                    </TouchableOpacity>
+        <>
+            {/* ───── LOW RISK WARNING MODAL ───── */}
+            <Modal visible={showLowWarning} transparent animationType="fade">
+                <View style={styles.modalOverlay}>
+                    <View style={styles.modalContent}>
+                        <View style={styles.warningIconWrap}>
+                            <MaterialIcons name="warning" size={36} color="#f59e0b" />
+                        </View>
+                        <Text style={styles.modalTitle}>LOW RISK DETECTED</Text>
+                        <Text style={styles.modalText}>
+                            Alerting your trusted contacts in{'\n'}
+                            <Text style={styles.countdown}>{lowCountdown}s</Text>
+                        </Text>
+                        <TouchableOpacity style={styles.cancelBtn} onPress={cancelLowRiskAlert}>
+                            <MaterialIcons name="block" size={18} color="#ccc" />
+                            <Text style={styles.cancelBtnText}>DISABLE</Text>
+                        </TouchableOpacity>
+                    </View>
                 </View>
-            </View>
-        </Modal>
+            </Modal>
+
+            {/* ───── HIGH RISK WARNING MODAL ───── */}
+            <Modal visible={showHighWarning} transparent animationType="fade">
+                <View style={styles.modalOverlay}>
+                    <View style={[styles.modalContent, styles.highRiskContent]}>
+                        <View style={styles.highRiskIconWrap}>
+                            <MaterialIcons name="videocam" size={36} color="#ec1313" />
+                        </View>
+                        <Text style={[styles.modalTitle, { color: '#ec1313' }]}>⚠️ HIGH RISK DETECTED</Text>
+                        <Text style={styles.modalText}>
+                            Video & audio recording will start in{'\n'}
+                            <Text style={[styles.countdown, { color: '#ec1313' }]}>{highCountdown}s</Text>
+                        </Text>
+                        <Text style={styles.subText}>Recording will be uploaded to cloud storage</Text>
+                        <TouchableOpacity style={[styles.cancelBtn, styles.highCancelBtn]} onPress={cancelHighRiskAlert}>
+                            <MaterialIcons name="block" size={18} color="#ccc" />
+                            <Text style={styles.cancelBtnText}>DISABLE RECORDING</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </Modal>
+
+            {/* ───── HIDDEN CAMERA VIEW (recording in background) ───── */}
+            {showCamera && (
+                <Modal visible={showCamera} transparent animationType="none">
+                    <View style={styles.cameraOverlay}>
+                        <CameraView
+                            ref={cameraRef}
+                            style={styles.hiddenCamera}
+                            facing={cameraFacing}
+                            mode="video"
+                            onCameraReady={startVideoCapture}
+                        />
+                        <View style={styles.recordingBadge}>
+                            <View style={styles.recordingDot} />
+                            <Text style={styles.recordingText}>REC • {uploadStatus}</Text>
+                        </View>
+                        <TouchableOpacity style={styles.stopBtn} onPress={stopVideoRecording}>
+                            <MaterialIcons name="stop-circle" size={32} color="#fff" />
+                            <Text style={styles.stopBtnText}>Stop Recording</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={styles.flipBtn}
+                            onPress={() => setCameraFacing(f => f === 'back' ? 'front' : 'back')}
+                        >
+                            <MaterialIcons name="flip-camera-android" size={28} color="#fff" />
+                        </TouchableOpacity>
+                    </View>
+                </Modal>
+            )}
+        </>
     );
 }
 
 const styles = StyleSheet.create({
     modalOverlay: {
         flex: 1,
-        backgroundColor: "rgba(0,0,0,0.8)",
+        backgroundColor: "rgba(0,0,0,0.85)",
         alignItems: "center",
         justifyContent: "center",
         padding: 20,
     },
     modalContent: {
-        backgroundColor: "#2a1b1b",
-        padding: 25,
-        borderRadius: 20,
+        backgroundColor: "#1e1414",
+        padding: 28,
+        borderRadius: 24,
         width: "100%",
         alignItems: "center",
         elevation: 10,
+        borderWidth: 1,
+        borderColor: "rgba(245,158,11,0.3)",
+    },
+    highRiskContent: {
+        borderColor: "rgba(236,19,19,0.4)",
+        backgroundColor: "#1a0f0f",
+    },
+    warningIconWrap: {
+        backgroundColor: "rgba(245,158,11,0.15)",
+        padding: 16,
+        borderRadius: 50,
+        marginBottom: 14,
+    },
+    highRiskIconWrap: {
+        backgroundColor: "rgba(236,19,19,0.15)",
+        padding: 16,
+        borderRadius: 50,
+        marginBottom: 14,
     },
     modalTitle: {
-        color: "#ec1313",
-        fontSize: 22,
+        color: "#f59e0b",
+        fontSize: 20,
         fontWeight: "bold",
         marginBottom: 10,
+        letterSpacing: 1,
     },
     modalText: {
         color: "#fff",
-        fontSize: 16,
-        marginBottom: 25,
+        fontSize: 15,
+        marginBottom: 10,
+        textAlign: "center",
+        lineHeight: 24,
+    },
+    countdown: {
+        fontSize: 36,
+        fontWeight: "bold",
+        color: "#f59e0b",
+    },
+    subText: {
+        color: "#888",
+        fontSize: 12,
+        marginBottom: 22,
         textAlign: "center",
     },
     cancelBtn: {
-        backgroundColor: "#1f1f1f",
-        paddingVertical: 15,
-        paddingHorizontal: 30,
-        borderRadius: 15,
+        backgroundColor: "#2a2a2a",
+        paddingVertical: 14,
+        paddingHorizontal: 28,
+        borderRadius: 16,
         borderWidth: 1,
         borderColor: "#555",
         width: "100%",
         alignItems: "center",
+        flexDirection: "row",
+        justifyContent: "center",
+        gap: 8,
+        marginTop: 10,
+    },
+    highCancelBtn: {
+        borderColor: "#ec1313",
+        backgroundColor: "rgba(236,19,19,0.1)",
     },
     cancelBtnText: {
         color: "#ccc",
         fontWeight: "bold",
-        fontSize: 16,
+        fontSize: 14,
+        letterSpacing: 0.5,
+    },
+    // Camera overlay styles
+    cameraOverlay: {
+        flex: 1,
+        backgroundColor: "#000",
+    },
+    hiddenCamera: {
+        flex: 1,
+    },
+    recordingBadge: {
+        position: "absolute",
+        top: 50,
+        left: 20,
+        flexDirection: "row",
+        alignItems: "center",
+        backgroundColor: "rgba(0,0,0,0.6)",
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 20,
+        gap: 8,
+    },
+    recordingDot: {
+        width: 10,
+        height: 10,
+        borderRadius: 5,
+        backgroundColor: "#ec1313",
+    },
+    recordingText: {
+        color: "#fff",
+        fontSize: 12,
+        fontWeight: "bold",
+    },
+    stopBtn: {
+        position: "absolute",
+        bottom: 60,
+        alignSelf: "center",
+        flexDirection: "row",
+        alignItems: "center",
+        backgroundColor: "rgba(236,19,19,0.85)",
+        paddingHorizontal: 24,
+        paddingVertical: 14,
+        borderRadius: 50,
+        gap: 8,
+    },
+    stopBtnText: {
+        color: "#fff",
+        fontWeight: "bold",
+        fontSize: 15,
+    },
+    flipBtn: {
+        position: "absolute",
+        top: 50,
+        right: 20,
+        backgroundColor: "rgba(0,0,0,0.5)",
+        padding: 10,
+        borderRadius: 30,
     },
 });
