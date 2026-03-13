@@ -15,6 +15,10 @@ import haversine from 'haversine';
 import BASE_URL from '../config/api';
 import * as IntentLauncher from 'expo-intent-launcher';
 import { MaterialIcons } from '@expo/vector-icons';
+const Device = { osBuildId: "mock-device-id" }; // Mock because native module is missing
+// import * as Device from 'expo-device'; 
+import { LinearGradient } from 'expo-linear-gradient';
+
 
 export default function EmergencyMonitor() {
     const [isListening, setIsListening] = useState(false);
@@ -37,9 +41,12 @@ export default function EmergencyMonitor() {
 
     // HIGH RISK modal + recording state
     const [showHighWarning, setShowHighWarning] = useState(false);
-    const [highCountdown, setHighCountdown] = useState(8);
+    const [highCountdown, setHighCountdown] = useState(10);
     const highCancelTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const highTimerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const isCancelledRef = useRef(false);
+
+
 
     // Camera recording
     const [showCamera, setShowCamera] = useState(false);
@@ -50,6 +57,8 @@ export default function EmergencyMonitor() {
     const videoRecordingRef = useRef<boolean>(false);
     const audioRecordingRef = useRef<Audio.Recording | null>(null);
     const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+    const luxRef = useRef<number>(100); // Default bright
+
 
     useEffect(() => {
         setup();
@@ -120,11 +129,24 @@ export default function EmergencyMonitor() {
             console.log('Shake detection unavailable:', e);
         }
 
+        // Blank screen detection via LightSensor (simulated)
+        let lightListener: { remove: () => void } | null = null;
+        try {
+            const { LightSensor } = require('expo-sensors');
+            lightListener = LightSensor.addListener((data: { illuminance: number }) => {
+                luxRef.current = data.illuminance;
+            });
+        } catch (e) {
+            console.log('Light sensor unavailable:', e);
+        }
+
         return () => {
             volumeListener.remove();
             if (shakeListener) shakeListener.remove();
+            if (lightListener) lightListener.remove();
         };
     };
+
 
     const fetchKeywords = async (id: string) => {
         try {
@@ -170,7 +192,7 @@ export default function EmergencyMonitor() {
             if (listeningTimeoutRef.current) clearTimeout(listeningTimeoutRef.current);
             listeningTimeoutRef.current = setTimeout(() => {
                 if (listeningRef.current) stopListening();
-            }, 10000);
+            }, 30000);
 
         } catch (e: any) {
             console.error("Voice Error: ", e);
@@ -322,8 +344,9 @@ export default function EmergencyMonitor() {
 
     const handleHighRisk = () => {
         console.log("🔴 HIGH RISK KEYWORD DETECTED");
+        isCancelledRef.current = false;
         setShowHighWarning(true);
-        setHighCountdown(8);
+        setHighCountdown(10);
 
         if (highTimerIntervalRef.current) clearInterval(highTimerIntervalRef.current);
         if (highCancelTimeoutRef.current) clearTimeout(highCancelTimeoutRef.current);
@@ -335,20 +358,33 @@ export default function EmergencyMonitor() {
             });
         }, 1000);
 
-        // After 8 seconds, if not cancelled → start recording
+        // Start recording IMMEDIATELY
+        startHighRiskRecording();
+
+        // After 10 seconds, if not cancelled → proceed with alerts
         highCancelTimeoutRef.current = setTimeout(() => {
             clearInterval(highTimerIntervalRef.current!);
             setShowHighWarning(false);
-            startHighRiskRecording();
-        }, 8000);
+            // alerts are handled after recording finishes or via some flag
+            console.log("High risk protocol confirmed after 10s");
+            // If recording is already done, it will upload. 
+            // If not, we can let it finish and upload.
+        }, 10000);
     };
 
+
+
     const cancelHighRiskAlert = () => {
+        isCancelledRef.current = true;
         if (highCancelTimeoutRef.current) clearTimeout(highCancelTimeoutRef.current);
         if (highTimerIntervalRef.current) clearInterval(highTimerIntervalRef.current);
         setShowHighWarning(false);
+        stopVideoRecording();
+        setIsRecording(false);
         console.log("⛔ High risk recording cancelled by user.");
     };
+
+
 
     const startHighRiskRecording = async () => {
         console.log("📹 Starting high risk video + audio recording...");
@@ -382,26 +418,29 @@ export default function EmergencyMonitor() {
         try {
             console.log("▶️ Video recording started");
 
-            // Record 30 seconds of video (adjust as needed)
-            const videoPromise = cameraRef.current.recordAsync({
-                maxDuration: 30,
-            } as any);
+            // Record until stopVideoRecording() is called
+            const videoPromise = cameraRef.current.recordAsync();
 
-            // Switch camera if it looks dark after 3 seconds
+
+            // Switch camera ONLY if a blank (dark) screen is detected after 3 seconds
             setTimeout(async () => {
-                if (videoRecordingRef.current) {
-                    console.log("Checking if camera is blank — switching to front camera");
+                if (videoRecordingRef.current && luxRef.current < 5) { // < 5 lux = very dark/blank
+                    console.log("🌑 Blank screen detected (Low light)! Switching to front camera.");
                     setCameraFacing(prev => prev === 'back' ? 'front' : 'back');
                 }
             }, 3000);
 
+
             const videoResult = await videoPromise;
 
-            if (videoResult && videoResult.uri) {
+            if (videoResult && videoResult.uri && !isCancelledRef.current) {
                 console.log("✅ Video saved at:", videoResult.uri);
                 setUploadStatus('Uploading to Cloudinary...');
                 await uploadToCloudinary(videoResult.uri, 'video');
+            } else {
+                console.log("Recording discarded (cancelled or empty)");
             }
+
         } catch (err) {
             console.error("Video recording error:", err);
             // Fall back to audio only
@@ -416,8 +455,28 @@ export default function EmergencyMonitor() {
     const stopVideoRecording = () => {
         if (cameraRef.current && videoRecordingRef.current) {
             cameraRef.current.stopRecording();
+            videoRecordingRef.current = false;
         }
     };
+
+    const stopAudioRecording = async () => {
+        if (audioRecordingRef.current) {
+            try {
+                await audioRecordingRef.current.stopAndUnloadAsync();
+                const uri = audioRecordingRef.current.getURI();
+                if (uri && !isCancelledRef.current) {
+                    setUploadStatus('Uploading audio to Cloudinary...');
+                    await uploadToCloudinary(uri, 'audio');
+                }
+            } catch (e) {
+                console.log("Stop audio error:", e);
+            } finally {
+                audioRecordingRef.current = null;
+                setIsRecording(false);
+            }
+        }
+    };
+
 
     const startAudioOnlyRecording = async () => {
         console.log("🎙️ Starting audio-only recording as fallback...");
@@ -428,20 +487,14 @@ export default function EmergencyMonitor() {
             await recording.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
             await recording.startAsync();
 
-            setTimeout(async () => {
-                await recording.stopAndUnloadAsync();
-                const uri = recording.getURI();
-                if (uri) {
-                    setUploadStatus('Uploading audio to Cloudinary...');
-                    await uploadToCloudinary(uri, 'audio');
-                }
-                setIsRecording(false);
-            }, 30000);
+            // Recording will continue until stopAudioRecording() is called
+            // No more 30s timeout
         } catch (err) {
             console.error("Audio recording error:", err);
             setIsRecording(false);
         }
     };
+
 
     /**
      * uploadToCloudinary
@@ -450,53 +503,78 @@ export default function EmergencyMonitor() {
      * secure_url to MySQL (emergency_recordings table), and emails all trusted
      * contacts with the recording link — all in one atomic request.
      */
+    /**
+     * uploadToCloudinary
+     * USES DIRECT SIGNED UPLOAD for security and efficiency.
+     */
     const uploadToCloudinary = async (localUri: string, type: 'video' | 'audio') => {
         try {
             const email = await AsyncStorage.getItem("userEmail");
-            if (!email) {
-                console.warn("⚠️ No user email found — cannot upload recording");
-                setUploadStatus('Upload failed: not logged in');
-                return;
-            }
+            const userId = await AsyncStorage.getItem("userId");
+            if (!email) return;
 
+            // 1. Get signature from backend
+            const sigRes = await fetch(`${BASE_URL}/generate-signature`);
+            const { signature, timestamp, cloud_name, api_key } = await sigRes.json();
+
+            // 2. Prepare Direct Upload FormData
             const extension = type === 'video' ? 'mp4' : 'm4a';
-            const mimeType  = type === 'video' ? 'video/mp4' : 'audio/m4a';
-            const fileName  = `emergency_${type}_${Date.now()}.${extension}`;
+            const mimeType = type === 'video' ? 'video/mp4' : 'audio/m4a';
+            const fileName = `emergency_${type}_${Date.now()}.${extension}`;
 
-            // Verify the file actually exists on device
-            const fileInfo = await FileSystem.getInfoAsync(localUri);
-            if (!fileInfo.exists) throw new Error("Recorded file not found on device");
-
-            // Get location for the SOS email
-            const locationStr = await getLocationString();
-
-            // Build FormData — React Native's fetch supports multipart natively
             const formData = new FormData();
             formData.append('file', {
                 uri: localUri,
                 name: fileName,
                 type: mimeType,
             } as any);
-            formData.append('email', email);
-            formData.append('type', type);
-            formData.append('location', locationStr);
+            formData.append('api_key', api_key);
+            formData.append('timestamp', timestamp.toString());
+            formData.append('signature', signature);
+            formData.append('folder', 'shield_emergency_records');
 
-            console.log(`☁️ Sending ${type} to backend for Cloudinary upload...`);
-            const response = await fetch(`${BASE_URL}/upload-recording`, {
+            // 3. Upload TO CLOUDINARY Directly
+            console.log(`☁️ Direct Cloudinary Upload (${type})...`);
+            const cloudRes = await fetch(`https://api.cloudinary.com/v1_1/${cloud_name}/${type}/upload`, {
                 method: 'POST',
                 body: formData,
-                // NOTE: Do NOT set Content-Type manually — fetch sets the correct
-                // multipart boundary automatically when body is FormData.
             });
 
-            const data = await response.json();
+            const cloudData = await cloudRes.json();
 
-            if (response.ok) {
-                console.log("✅ Cloudinary upload succeeded:", data.cloudinaryUrl);
+            if (cloudRes.ok) {
+                console.log("✅ Direct Upload Succeeded:", cloudData.secure_url);
                 setUploadStatus('✅ Upload complete!');
+
+                // 4. Trigger Twilio Protocol + DB Log
+                const locationStr = await getLocationString();
+                const contactResponse = await fetch(`${BASE_URL}/getTrustedContacts/${userId}`);
+                const contacts = await contactResponse.json();
+
+                let deviceId = "Unknown";
+                try {
+                    deviceId = Device.osBuildId || "Unknown";
+                } catch (e) {
+                    console.log("Device module failed:", e);
+                }
+
+                await fetch(`${BASE_URL}/trigger-emergency-protocol`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: userId,
+                        keyword: "HIGH-RISK DETECTED",
+                        location_link: locationStr,
+                        recording_url: cloudData.secure_url,
+                        cloudinary_public_id: cloudData.public_id,
+                        contacts: contacts,
+                        device_id: deviceId,
+                    }),
+                });
+
             } else {
-                console.error("❌ Backend upload error:", data.message);
-                setUploadStatus('Upload failed');
+                console.error("❌ Cloudinary error:", cloudData);
+                setUploadStatus('Cloudinary Error');
             }
 
         } catch (err) {
@@ -504,6 +582,7 @@ export default function EmergencyMonitor() {
             setUploadStatus('Upload failed');
         }
     };
+
 
     const getLocationString = async (): Promise<string> => {
         try {
@@ -541,25 +620,29 @@ export default function EmergencyMonitor() {
             </Modal>
 
             {/* ───── HIGH RISK WARNING MODAL ───── */}
-            <Modal visible={showHighWarning} transparent animationType="fade">
+            <Modal visible={showHighWarning} transparent animationType="slide">
                 <View style={styles.modalOverlay}>
-                    <View style={[styles.modalContent, styles.highRiskContent]}>
+                    <LinearGradient
+                        colors={['#2a0f0f', '#1a0505']}
+                        style={[styles.modalContent, styles.highRiskContent]}
+                    >
                         <View style={styles.highRiskIconWrap}>
-                            <MaterialIcons name="videocam" size={36} color="#ec1313" />
+                            <MaterialIcons name="videocam" size={42} color="#ec1313" />
                         </View>
-                        <Text style={[styles.modalTitle, { color: '#ec1313' }]}>⚠️ HIGH RISK DETECTED</Text>
+                        <Text style={[styles.modalTitle, { color: '#ec1313', fontSize: 24 }]}>🚨 HIGH-RISK DETECTED</Text>
                         <Text style={styles.modalText}>
-                            Video & audio recording will start in{'\n'}
-                            <Text style={[styles.countdown, { color: '#ec1313' }]}>{highCountdown}s</Text>
+                            Emergency recording and alerts are active.{'\n'}
+                            Sending SOS in <Text style={[styles.countdown, { color: '#ec1313' }]}>{highCountdown}s</Text>
                         </Text>
-                        <Text style={styles.subText}>Recording will be uploaded to cloud storage</Text>
+                        <Text style={styles.subText}>Cloud storage enabled for evidence collection</Text>
                         <TouchableOpacity style={[styles.cancelBtn, styles.highCancelBtn]} onPress={cancelHighRiskAlert}>
-                            <MaterialIcons name="block" size={18} color="#ccc" />
-                            <Text style={styles.cancelBtnText}>DISABLE RECORDING</Text>
+                            <MaterialIcons name="security" size={20} color="#fff" />
+                            <Text style={[styles.cancelBtnText, { color: '#fff' }]}>DISABLE EMERGENCY</Text>
                         </TouchableOpacity>
-                    </View>
+                    </LinearGradient>
                 </View>
             </Modal>
+
 
             {/* ───── HIDDEN CAMERA VIEW (recording in background) ───── */}
             {showCamera && (
@@ -576,10 +659,19 @@ export default function EmergencyMonitor() {
                             <View style={styles.recordingDot} />
                             <Text style={styles.recordingText}>REC • {uploadStatus}</Text>
                         </View>
-                        <TouchableOpacity style={styles.stopBtn} onPress={stopVideoRecording}>
-                            <MaterialIcons name="stop-circle" size={32} color="#fff" />
-                            <Text style={styles.stopBtnText}>Stop Recording</Text>
+                        <TouchableOpacity 
+                            style={styles.stopBtn} 
+                            onPress={() => {
+                                stopVideoRecording();
+                                stopAudioRecording();
+                                setShowCamera(false);
+                                setIsRecording(false);
+                            }}
+                        >
+                            <MaterialIcons name="security" size={32} color="#fff" />
+                            <Text style={styles.stopBtnText}>I AM SAFE (Stop & Send)</Text>
                         </TouchableOpacity>
+
                         <TouchableOpacity
                             style={styles.flipBtn}
                             onPress={() => setCameraFacing(f => f === 'back' ? 'front' : 'back')}

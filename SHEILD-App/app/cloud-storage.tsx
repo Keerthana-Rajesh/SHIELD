@@ -1,16 +1,87 @@
+import React, { useEffect, useState } from "react";
 import {
     View,
     Text,
     StyleSheet,
     ScrollView,
     TouchableOpacity,
+    ActivityIndicator,
+    Alert,
+    RefreshControl,
 } from "react-native";
 import { MaterialIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import BASE_URL from "../config/api";
 
 export default function CloudStorage() {
-
+    const [recordings, setRecordings] = useState<any[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
+    const [filter, setFilter] = useState<'video' | 'audio'>('audio');
     const router = useRouter();
+
+    const fetchRecordings = async () => {
+        try {
+            const email = await AsyncStorage.getItem("userEmail");
+            if (!email) return;
+
+            const res = await fetch(`${BASE_URL}/recordings/${email}`);
+            const data = await res.json();
+            if (res.ok) {
+                setRecordings(data);
+            }
+        } catch (err) {
+            console.error("Fetch recordings error:", err);
+        } finally {
+            setLoading(false);
+            setRefreshing(false);
+        }
+    };
+
+    useEffect(() => {
+        fetchRecordings();
+    }, []);
+
+    const onRefresh = () => {
+        setRefreshing(true);
+        fetchRecordings();
+    };
+
+    const handleDelete = async (id: number) => {
+        Alert.alert(
+            "Delete Recording",
+            "Are you sure you want to delete this evidence?",
+            [
+                { text: "Cancel", style: "cancel" },
+                {
+                    text: "Delete",
+                    style: "destructive",
+                    onPress: async () => {
+                        try {
+                            const res = await fetch(`${BASE_URL}/emergency-recording/${id}`, {
+                                method: 'DELETE'
+                            });
+                            if (res.ok) {
+                                setRecordings(prev => prev.filter(r => r.id !== id));
+                            }
+                        } catch (err) {
+                            console.error("Delete error:", err);
+                        }
+                    }
+                }
+            ]
+        );
+    };
+
+    const formatDate = (dateStr: string) => {
+        const d = new Date(dateStr);
+        return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+    };
+
+    const filteredRecordings = recordings.filter(r => 
+        filter === 'video' ? r.type === 'video' || r.type === 'video_clip' : r.type === 'audio' || r.type === 'audio_call'
+    );
 
     return (
         <View style={styles.container}>
@@ -61,14 +132,20 @@ export default function CloudStorage() {
                 {/* FILTER BUTTONS */}
                 <View style={styles.filterRow}>
 
-                    <TouchableOpacity style={styles.activeFilter}>
-                        <Text style={styles.activeFilterText}>
+                    <TouchableOpacity 
+                        style={filter === 'audio' ? styles.activeFilter : styles.filter}
+                        onPress={() => setFilter('audio')}
+                    >
+                        <Text style={filter === 'audio' ? styles.activeFilterText : styles.filterText}>
                             Audio Recordings
                         </Text>
                     </TouchableOpacity>
 
-                    <TouchableOpacity style={styles.filter}>
-                        <Text style={styles.filterText}>
+                    <TouchableOpacity 
+                        style={filter === 'video' ? styles.activeFilter : styles.filter}
+                        onPress={() => setFilter('video')}
+                    >
+                        <Text style={filter === 'video' ? styles.activeFilterText : styles.filterText}>
                             Video Recordings
                         </Text>
                     </TouchableOpacity>
@@ -77,27 +154,26 @@ export default function CloudStorage() {
 
 
                 {/* RECORDINGS */}
-
-                <RecordingCard
-                    icon="mic"
-                    title="Audio Recording"
-                    date="12 May 2026"
-                    duration="00:32 sec"
-                />
-
-                <RecordingCard
-                    icon="videocam"
-                    title="Video Recording"
-                    date="12 May 2026"
-                    duration="00:48 sec"
-                />
-
-                <RecordingCard
-                    icon="mic"
-                    title="Audio Recording"
-                    date="10 May 2026"
-                    duration="01:15 sec"
-                />
+                {loading ? (
+                    <ActivityIndicator size="large" color="#ec1313" style={{ marginTop: 50 }} />
+                ) : filteredRecordings.length === 0 ? (
+                    <View style={styles.emptyContainer}>
+                        <MaterialIcons name="folder-open" size={64} color="#333" />
+                        <Text style={styles.emptyText}>No recordings found</Text>
+                    </View>
+                ) : (
+                    filteredRecordings.map((rec) => (
+                        <RecordingCard
+                            key={rec.id}
+                            icon={rec.type.includes('video') ? "videocam" : "mic"}
+                            title={rec.type.includes('video') ? "Video Evidence" : "Audio Evidence"}
+                            date={formatDate(rec.recorded_at || rec.created_at)}
+                            duration="00:30 sec" // Mock duration
+                            onDelete={() => handleDelete(rec.id)}
+                            onPlay={() => Alert.alert("Play", "Opening: " + rec.url)}
+                        />
+                    ))
+                )}
 
             </ScrollView>
 
@@ -147,10 +223,13 @@ interface RecordingCardProps {
     date: string;
     duration: string;
     active?: boolean;
-    onPress?: () => void;
+    onDelete?: () => void;
+    onPlay?: () => void;
 }
 
-function RecordingCard({ icon, title, date, duration, active = false, onPress = () => { } }: RecordingCardProps) {
+function RecordingCard({ 
+    icon, title, date, duration, active = false, onDelete, onPlay 
+}: RecordingCardProps) {
 
 
     return (
@@ -175,7 +254,7 @@ function RecordingCard({ icon, title, date, duration, active = false, onPress = 
 
             <View style={styles.actionRow}>
 
-                <TouchableOpacity style={styles.actionBtn}>
+                <TouchableOpacity style={styles.actionBtn} onPress={onPlay}>
                     <MaterialIcons name="play-arrow" size={20} color="#ccc" />
                 </TouchableOpacity>
 
@@ -183,7 +262,7 @@ function RecordingCard({ icon, title, date, duration, active = false, onPress = 
                     <MaterialIcons name="download" size={20} color="#ccc" />
                 </TouchableOpacity>
 
-                <TouchableOpacity style={styles.actionBtn}>
+                <TouchableOpacity style={styles.actionBtn} onPress={onDelete}>
                     <MaterialIcons name="delete" size={20} color="#ec1313" />
                 </TouchableOpacity>
 
@@ -395,4 +474,14 @@ const styles = StyleSheet.create({
         marginTop: 2,
     },
 
-});
+    emptyContainer: {
+        alignItems: "center",
+        justifyContent: "center",
+        marginTop: 100,
+    },
+    emptyText: {
+        color: "#555",
+        marginTop: 10,
+        fontSize: 16,
+    },
+});

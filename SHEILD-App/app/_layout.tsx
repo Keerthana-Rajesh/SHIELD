@@ -30,7 +30,7 @@ export default function Layout() {
       ReactNativeForegroundService.start({
         id: 114,
         title: "SHIELD Guardian Active",
-        message: "Listening for volume triggers and shakes.",
+        message: "Monitoring keywords, volume triggers and shakes.",
         icon: "ic_launcher",
         button: false,
         button2: false,

@@ -1,5 +1,21 @@
 const express = require("express");
+/**
+ * DB Table Schema for High-Risk Alerts:
+ * 
+ * CREATE TABLE emergency_incidents (
+ *   id INT AUTO_INCREMENT PRIMARY KEY,
+ *   user_id INT,
+ *   detected_keyword VARCHAR(255),
+ *   location_url TEXT,
+ *   recording_url TEXT,
+ *   contacts_notified JSON,
+ *   status VARCHAR(50),
+ *   cloudinary_public_id VARCHAR(255),
+ *   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+ * );
+ */
 const mysql = require("mysql2");
+
 const cors = require("cors");
 const nodemailer = require("nodemailer");
 const multer = require("multer");
@@ -21,6 +37,9 @@ cloudinary.config({
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
+
+
+
 
 // Multer — stores uploaded file to disk temporarily
 const tmpDir = path.join(__dirname, "tmp_uploads");
@@ -819,12 +838,162 @@ app.get("/recordings/:email", async (req, res) => {
     if (userRows.length === 0) return res.status(404).json({ message: "User not found" });
 
     const [rows] = await db.promise().query(
-      "SELECT * FROM emergency_recordings WHERE user_id = ? ORDER BY recorded_at DESC",
-      [userRows[0].id]
+      `(SELECT id, type, url, recorded_at FROM emergency_recordings WHERE user_id = ?)
+       UNION
+       (SELECT id, 'video' as type, recording_url as url, created_at as recorded_at FROM emergency_incidents WHERE user_id = ? AND recording_url IS NOT NULL)
+       ORDER BY recorded_at DESC`,
+      [userRows[0].id, userRows[0].id]
     );
     res.json(rows);
   } catch (err) {
     console.error("Get Recordings Error:", err);
     res.status(500).json({ message: "Server error" });
   }
-});
+});
+
+/* ===================================================
+   🔹 GEN SIGNATURE FOR CLOUDINARY (Secure Direct Upload)
+=================================================== */
+app.get("/generate-signature", (req, res) => {
+  const timestamp = Math.round(new Date().getTime() / 1000);
+  const signature = cloudinary.utils.api_sign_request(
+    {
+      timestamp: timestamp,
+      folder: "shield_emergency_records",
+    },
+    process.env.CLOUDINARY_API_SECRET
+  );
+
+  res.json({
+    signature,
+    timestamp,
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+  });
+});
+
+/* ===================================================
+   🔹 EMERGENCY ALERT (GMAIL + LOG)
+=================================================== */
+app.post("/trigger-emergency-protocol", async (req, res) => {
+  const { user_id, keyword, location_link, recording_url, contacts, cloudinary_public_id } = req.body;
+
+  try {
+    // 1. Get user name for the email
+    const [userRows] = await db.promise().query(
+      "SELECT name FROM users WHERE id = ?", [user_id]
+    );
+    const userName = userRows.length > 0 ? userRows[0].name : `User ${user_id}`;
+
+    // 2. Prepare recipient list
+    const recipients = contacts
+      .map(c => c.contact_email || c.email)
+      .filter(email => email && email.trim() !== "");
+
+    if (recipients.length > 0) {
+      // 3. Send SOS Email via Nodemailer
+      const mailOptions = {
+        from: `"SHIELD Emergency" <${process.env.EMAIL_USER}>`,
+        to: recipients,
+        subject: "🚨 HIGH-RISK EMERGENCY ALERT - SHIELD",
+        html: `
+          <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;border:3px solid #ec1313;border-radius:15px;overflow:hidden">
+            <div style="background:#ec1313;padding:25px;text-align:center">
+              <h1 style="color:#fff;margin:0;font-size:26px">🚨 HIGH-RISK ALERT 🚨</h1>
+            </div>
+            <div style="padding:30px;background:#1a0f0f;color:#fff">
+              <p style="font-size:18px"><strong>${userName}</strong> is in a potential high-risk situation.</p>
+              <div style="background:rgba(236,19,19,0.1);border-left:5px solid #ec1313;padding:15px;margin:20px 0;border-radius:5px">
+                <p style="margin:0">📍 <strong>Live Location:</strong><br/>
+                <a href="${location_link}" style="color:#ec1313;font-weight:bold;text-decoration:none">${location_link}</a></p>
+              </div>
+              <p>📹 <strong>Emergency Evidence (Recording):</strong><br/>
+                <a href="${recording_url}" style="color:#ec1313;word-break:break-all">${recording_url}</a>
+              </p>
+              <hr style="border:0;border-top:1px solid #333;margin:20px 0"/>
+              <p style="text-align:center;font-style:italic">Please check on them immediately.</p>
+            </div>
+            <div style="background:#000;padding:15px;text-align:center">
+              <p style="color:#666;font-size:12px;margin:0">Sent automatically by SHIELD Safety AI</p>
+            </div>
+          </div>
+        `
+      };
+
+      await transporter.sendMail(mailOptions);
+      console.log("✅ High-risk alert email sent to:", recipients);
+    } else {
+      console.log("⚠️ No contact emails found for /trigger-emergency-protocol");
+    }
+
+    // 4. Log to Database
+    await db.promise().query(
+      `INSERT INTO emergency_incidents (user_id, detected_keyword, location_url, recording_url, contacts_notified, status, cloudinary_public_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [user_id, keyword, location_link, recording_url, JSON.stringify(contacts), "EMAIL_SENT", cloudinary_public_id]
+    );
+
+    res.json({ success: true, message: "Emergency email alerts sent and logged." });
+  } catch (error) {
+    console.error("Emergency Protocol Error:", error);
+    res.status(500).json({ success: false, message: "Failed to trigger email protocol" });
+  }
+});
+
+/* ===================================================
+   🔹 DELETE INCIDENT (Sync with Cloudinary)
+=================================================== */
+app.delete("/emergency-incident/:id", async (req, res) => {
+  const { id } = req.params;
+  try {
+    // 1. Fetch public_id from DB
+    const [rows] = await db.promise().query(
+      "SELECT cloudinary_public_id FROM emergency_incidents WHERE id = ?", [id]
+    );
+
+    if (rows.length === 0) return res.status(404).json({ message: "Record not found" });
+
+    const publicId = rows[0].cloudinary_public_id;
+
+    // 2. Delete from Cloudinary if exists
+    if (publicId) {
+      // Note: use 'video' or 'raw' type since audio/video is used.
+      const result = await cloudinary.uploader.destroy(publicId, { resource_type: 'video' });
+      console.log(`Cloudinary Delete Result (${publicId}):`, result);
+      
+      // Fallback for other storage types
+      if (result.result !== 'ok') {
+         await cloudinary.uploader.destroy(publicId, { resource_type: 'raw' });
+         await cloudinary.uploader.destroy(publicId, { resource_type: 'image' });
+      }
+    }
+
+    // 3. Delete from Database
+    await db.promise().query("DELETE FROM emergency_incidents WHERE id = ?", [id]);
+
+    res.json({ success: true, message: "Incident and Cloudinary asset deleted." });
+  } catch (err) {
+    console.error("Delete Incident Error:", err);
+    res.status(500).json({ message: "Failed to delete incident", error: err.message });
+  }
+});
+
+/* ===================================================
+   🔹 UPDATE INCIDENT STATUS
+=================================================== */
+app.put("/emergency-incident/:id", async (req, res) => {
+  const { id } = req.params;
+  const { status, detected_keyword } = req.body;
+  try {
+    await db.promise().query(
+      "UPDATE emergency_incidents SET status = COALESCE(?, status), detected_keyword = COALESCE(?, detected_keyword) WHERE id = ?",
+      [status, detected_keyword, id]
+    );
+    res.json({ success: true, message: "Incident updated successfully" });
+  } catch (err) {
+    console.error("Update Incident Error:", err);
+    res.status(500).json({ message: "Update failed" });
+  }
+});
+
+
