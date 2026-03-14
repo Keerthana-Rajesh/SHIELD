@@ -7,18 +7,21 @@ import {
     TouchableOpacity,
     ActivityIndicator,
     Alert,
-    RefreshControl,
+    Modal,
 } from "react-native";
 import { MaterialIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import BASE_URL from "../config/api";
+import * as WebBrowser from 'expo-web-browser';
+import { Video, ResizeMode } from 'expo-av';
 
 export default function CloudStorage() {
     const [recordings, setRecordings] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [filter, setFilter] = useState<'video' | 'audio'>('audio');
+    const [playingUrl, setPlayingUrl] = useState<string | null>(null);
     const router = useRouter();
 
     const fetchRecordings = async () => {
@@ -59,7 +62,7 @@ export default function CloudStorage() {
                     style: "destructive",
                     onPress: async () => {
                         try {
-                            const res = await fetch(`${BASE_URL}/emergency-recording/${id}`, {
+                            const res = await fetch(`${BASE_URL}/delete-recording/${id}`, {
                                 method: 'DELETE'
                             });
                             if (res.ok) {
@@ -76,10 +79,10 @@ export default function CloudStorage() {
 
     const formatDate = (dateStr: string) => {
         const d = new Date(dateStr);
-        return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+        return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
     };
 
-    const filteredRecordings = recordings.filter(r => 
+    const filteredRecordings = recordings.filter(r =>
         filter === 'video' ? r.type === 'video' || r.type === 'video_clip' : r.type === 'audio' || r.type === 'audio_call'
     );
 
@@ -88,70 +91,46 @@ export default function CloudStorage() {
 
             {/* HEADER */}
             <View style={styles.header}>
-
                 <View style={styles.headerLeft}>
                     <View style={styles.headerIcon}>
                         <MaterialIcons name="cloud" size={28} color="#ec1313" />
                     </View>
-
                     <View>
                         <Text style={styles.headerTitle}>Cloud Storage</Text>
-                        <Text style={styles.headerSub}>
-                            Emergency recordings saved securely
-                        </Text>
+                        <Text style={styles.headerSub}>Emergency recordings saved securely</Text>
                     </View>
                 </View>
-
                 <MaterialIcons name="more-vert" size={24} color="#aaa" />
-
             </View>
 
-
             <ScrollView contentContainerStyle={{ paddingBottom: 120 }}>
-
                 {/* STORAGE STATUS */}
                 <View style={styles.statusCard}>
-
                     <View style={styles.statusIcon}>
                         <MaterialIcons name="cloud-done" size={24} color="#ec1313" />
                     </View>
-
                     <View>
-                        <Text style={styles.statusTitle}>
-                            Secure Cloud Backup Active
-                        </Text>
-
-                        <Text style={styles.statusSub}>
-                            Audio and video evidence stored safely
-                        </Text>
+                        <Text style={styles.statusTitle}>Secure Cloud Backup Active</Text>
+                        <Text style={styles.statusSub}>Audio and video evidence stored safely</Text>
                     </View>
-
                 </View>
-
 
                 {/* FILTER BUTTONS */}
                 <View style={styles.filterRow}>
-
-                    <TouchableOpacity 
+                    <TouchableOpacity
                         style={filter === 'audio' ? styles.activeFilter : styles.filter}
                         onPress={() => setFilter('audio')}
                     >
-                        <Text style={filter === 'audio' ? styles.activeFilterText : styles.filterText}>
-                            Audio Recordings
-                        </Text>
+                        <Text style={filter === 'audio' ? styles.activeFilterText : styles.filterText}>Audio</Text>
                     </TouchableOpacity>
 
-                    <TouchableOpacity 
+                    <TouchableOpacity
                         style={filter === 'video' ? styles.activeFilter : styles.filter}
                         onPress={() => setFilter('video')}
                     >
-                        <Text style={filter === 'video' ? styles.activeFilterText : styles.filterText}>
-                            Video Recordings
-                        </Text>
+                        <Text style={filter === 'video' ? styles.activeFilterText : styles.filterText}>Video</Text>
                     </TouchableOpacity>
-
                 </View>
-
 
                 {/* RECORDINGS */}
                 {loading ? (
@@ -167,114 +146,104 @@ export default function CloudStorage() {
                             key={rec.id}
                             icon={rec.type.includes('video') ? "videocam" : "mic"}
                             title={rec.type.includes('video') ? "Video Evidence" : "Audio Evidence"}
-                            date={formatDate(rec.recorded_at || rec.created_at)}
-                            duration="00:30 sec" // Mock duration
+                            date={formatDate(rec.recorded_at)}
+                            keyword={rec.keyword}
+                            location={rec.location}
                             onDelete={() => handleDelete(rec.id)}
-                            onPlay={() => Alert.alert("Play", "Opening: " + rec.url)}
+                            onPlay={() => setPlayingUrl(rec.url)}
                         />
                     ))
                 )}
-
             </ScrollView>
 
+            {/* VIDEO PLAYER MODAL */}
+            <Modal visible={!!playingUrl} transparent animationType="slide" onRequestClose={() => setPlayingUrl(null)}>
+                <View style={styles.playerWrapper}>
+                    <View style={styles.playerContainer}>
+                        <View style={styles.playerHeader}>
+                            <Text style={styles.playerTitle}>Emergency Evidence</Text>
+                            <TouchableOpacity onPress={() => setPlayingUrl(null)}>
+                                <MaterialIcons name="close" size={28} color="#fff" />
+                            </TouchableOpacity>
+                        </View>
+
+                        {playingUrl && (
+                            <Video
+                                source={{ uri: playingUrl }}
+                                rate={1.0}
+                                volume={1.0}
+                                isMuted={false}
+                                resizeMode={ResizeMode.CONTAIN}
+                                shouldPlay
+                                useNativeControls
+                                style={styles.videoPlayer}
+                            />
+                        )}
+
+                        <TouchableOpacity style={styles.browserBtn} onPress={() => {
+                            if (playingUrl) WebBrowser.openBrowserAsync(playingUrl);
+                        }}>
+                            <Text style={styles.browserBtnText}>Open in Browser</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </Modal>
 
             {/* BOTTOM NAVBAR */}
-
             <View style={styles.navBar}>
-
-                <NavItem
-                    icon="home"
-                    label="Home"
-                    onPress={() => router.replace("/dashboard")}
-                />
-
-                <NavItem
-                    icon="group"
-                    label="Contacts"
-                    onPress={() => router.push("/contacts")}
-                />
-
+                <NavItem icon="home" label="Home" onPress={() => router.replace("/dashboard")} />
+                <NavItem icon="group" label="Contacts" onPress={() => router.push("/contacts")} />
                 <NavItem icon="cloud" label="Storage" active />
-
-                <NavItem
-                    icon="map"
-                    label="SafeMap"
-                    onPress={() => router.push("/safemap")}
-                />
-
-                <NavItem
-                    icon="settings"
-                    label="Settings"
-                    onPress={() => router.push("/settings")}
-                />
-
+                <NavItem icon="map" label="SafeMap" onPress={() => router.push("/safemap")} />
+                <NavItem icon="settings" label="Settings" onPress={() => router.push("/settings")} />
             </View>
-
         </View>
     );
 }
 
-
 /* RECORDING CARD */
-
 interface RecordingCardProps {
     icon: React.ComponentProps<typeof MaterialIcons>["name"];
     title: string;
     date: string;
-    duration: string;
-    active?: boolean;
-    onDelete?: () => void;
-    onPlay?: () => void;
+    onDelete: () => void;
+    onPlay: () => void;
+    keyword?: string;
+    location?: string;
 }
 
-function RecordingCard({ 
-    icon, title, date, duration, active = false, onDelete, onPlay 
-}: RecordingCardProps) {
-
-
+function RecordingCard({ icon, title, date, onDelete, onPlay, keyword, location }: RecordingCardProps) {
     return (
         <View style={styles.recordingCard}>
-
             <View style={styles.recordingLeft}>
-
                 <View style={styles.recordIcon}>
                     <MaterialIcons name={icon} size={22} color="#ec1313" />
                 </View>
-
-                <View>
+                <View style={styles.textContainer}>
                     <Text style={styles.recordTitle}>{title}</Text>
-
-                    <Text style={styles.recordMeta}>
-                        {date} • {duration}
-                    </Text>
+                    <Text style={styles.recordMeta}>{date}</Text>
+                    {keyword ? <Text style={styles.kwText}>Trigger: {keyword}</Text> : null}
+                    {location ? (
+                        <TouchableOpacity onPress={() => WebBrowser.openBrowserAsync(location)}>
+                            <Text style={styles.locText} numberOfLines={1}>📍 Location Link</Text>
+                        </TouchableOpacity>
+                    ) : null}
                 </View>
-
             </View>
 
-
             <View style={styles.actionRow}>
-
                 <TouchableOpacity style={styles.actionBtn} onPress={onPlay}>
                     <MaterialIcons name="play-arrow" size={20} color="#ccc" />
                 </TouchableOpacity>
-
-                <TouchableOpacity style={styles.actionBtn}>
-                    <MaterialIcons name="download" size={20} color="#ccc" />
-                </TouchableOpacity>
-
                 <TouchableOpacity style={styles.actionBtn} onPress={onDelete}>
                     <MaterialIcons name="delete" size={20} color="#ec1313" />
                 </TouchableOpacity>
-
             </View>
-
         </View>
     );
 }
 
-
 /* NAV ITEM */
-
 interface NavItemProps {
     icon: React.ComponentProps<typeof MaterialIcons>["name"];
     label: string;
@@ -283,40 +252,20 @@ interface NavItemProps {
 }
 
 function NavItem({ icon, label, active, onPress }: NavItemProps) {
-
     return (
         <TouchableOpacity style={styles.navItem} onPress={onPress}>
-
-            <MaterialIcons
-                name={icon}
-                size={24}
-                color={active ? "#ec1313" : "#777"}
-            />
-
-            <Text
-                style={[
-                    styles.navLabel,
-                    { color: active ? "#ec1313" : "#777" },
-                ]}
-            >
-                {label}
-            </Text>
-
+            <MaterialIcons name={icon} size={24} color={active ? "#ec1313" : "#777"} />
+            <Text style={[styles.navLabel, { color: active ? "#ec1313" : "#777" }]}>{label}</Text>
         </TouchableOpacity>
     );
 }
 
-
-/* STYLES */
-
 const styles = StyleSheet.create({
-
     container: {
         flex: 1,
         backgroundColor: "#181111",
         paddingTop: 40,
     },
-
     header: {
         flexDirection: "row",
         justifyContent: "space-between",
@@ -324,30 +273,25 @@ const styles = StyleSheet.create({
         paddingHorizontal: 20,
         marginBottom: 20,
     },
-
     headerLeft: {
         flexDirection: "row",
         alignItems: "center",
     },
-
     headerIcon: {
         backgroundColor: "rgba(236,19,19,0.1)",
         padding: 10,
         borderRadius: 15,
         marginRight: 12,
     },
-
     headerTitle: {
         color: "#fff",
         fontSize: 20,
         fontWeight: "bold",
     },
-
     headerSub: {
         color: "#aaa",
         fontSize: 12,
     },
-
     statusCard: {
         backgroundColor: "#2a1b1b",
         marginHorizontal: 20,
@@ -357,30 +301,25 @@ const styles = StyleSheet.create({
         flexDirection: "row",
         alignItems: "center",
     },
-
     statusIcon: {
         backgroundColor: "rgba(236,19,19,0.2)",
         padding: 8,
         borderRadius: 10,
         marginRight: 10,
     },
-
     statusTitle: {
         color: "#fff",
         fontWeight: "bold",
     },
-
     statusSub: {
         color: "#aaa",
         fontSize: 12,
     },
-
     filterRow: {
         flexDirection: "row",
         paddingHorizontal: 20,
         marginBottom: 15,
     },
-
     activeFilter: {
         flex: 1,
         backgroundColor: "#ec1313",
@@ -389,7 +328,6 @@ const styles = StyleSheet.create({
         alignItems: "center",
         marginRight: 10,
     },
-
     filter: {
         flex: 1,
         backgroundColor: "#2a1b1b",
@@ -397,17 +335,14 @@ const styles = StyleSheet.create({
         borderRadius: 15,
         alignItems: "center",
     },
-
     activeFilterText: {
         color: "#fff",
         fontWeight: "bold",
     },
-
     filterText: {
         color: "#aaa",
         fontWeight: "bold",
     },
-
     recordingCard: {
         backgroundColor: "#2a1b1b",
         marginHorizontal: 20,
@@ -418,40 +353,48 @@ const styles = StyleSheet.create({
         justifyContent: "space-between",
         alignItems: "center",
     },
-
     recordingLeft: {
         flexDirection: "row",
         alignItems: "center",
+        flex: 1,
     },
-
     recordIcon: {
         backgroundColor: "#1f1f1f",
         padding: 8,
         borderRadius: 10,
         marginRight: 10,
     },
-
+    textContainer: {
+        flex: 1,
+    },
     recordTitle: {
         color: "#fff",
         fontWeight: "bold",
     },
-
     recordMeta: {
         color: "#888",
         fontSize: 11,
     },
-
+    kwText: {
+        color: "#f59e0b",
+        fontSize: 11,
+        marginTop: 2,
+    },
+    locText: {
+        color: "#3498db",
+        fontSize: 10,
+        marginTop: 2,
+        textDecorationLine: 'underline',
+    },
     actionRow: {
         flexDirection: "row",
     },
-
     actionBtn: {
         backgroundColor: "#1f1f1f",
         padding: 8,
         borderRadius: 20,
         marginLeft: 6,
     },
-
     navBar: {
         position: "absolute",
         bottom: 0,
@@ -464,16 +407,13 @@ const styles = StyleSheet.create({
         justifyContent: "space-around",
         alignItems: "center",
     },
-
     navItem: {
         alignItems: "center",
     },
-
     navLabel: {
         fontSize: 10,
         marginTop: 2,
     },
-
     emptyContainer: {
         alignItems: "center",
         justifyContent: "center",
@@ -484,4 +424,41 @@ const styles = StyleSheet.create({
         marginTop: 10,
         fontSize: 16,
     },
-});
+    playerWrapper: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.9)',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    playerContainer: {
+        width: '95%',
+        aspectRatio: 16 / 9,
+        backgroundColor: '#000',
+        borderRadius: 20,
+        overflow: 'hidden',
+    },
+    playerHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        padding: 15,
+        backgroundColor: '#1a0f0f',
+    },
+    playerTitle: {
+        color: '#fff',
+        fontSize: 18,
+        fontWeight: 'bold',
+    },
+    videoPlayer: {
+        flex: 1,
+        width: '100%',
+    },
+    browserBtn: {
+        backgroundColor: '#ec1313',
+        padding: 15,
+        alignItems: 'center',
+    },
+    browserBtnText: {
+        color: '#fff',
+        fontWeight: 'bold',
+    },
+});

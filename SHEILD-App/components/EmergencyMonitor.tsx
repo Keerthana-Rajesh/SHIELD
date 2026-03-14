@@ -58,6 +58,7 @@ export default function EmergencyMonitor() {
     const audioRecordingRef = useRef<Audio.Recording | null>(null);
     const [cameraPermission, requestCameraPermission] = useCameraPermissions();
     const luxRef = useRef<number>(100); // Default bright
+    const triggeredKeywordRef = useRef<string>('');
 
 
     useEffect(() => {
@@ -207,21 +208,29 @@ export default function EmergencyMonitor() {
         if (!results || results.length === 0) return;
         console.log("Detecting speech:", results);
 
-        const isHighRisk = results.some(res =>
-            keywordsRef.current.high.some(kw => res.toLowerCase().includes(kw))
+        const highMatch = results.find(res =>
+            keywordsRef.current.high.some(kw => {
+                const found = res.toLowerCase().includes(kw);
+                if (found) triggeredKeywordRef.current = kw; // Store the actual keyword matched
+                return found;
+            })
         );
 
-        if (isHighRisk) {
+        if (highMatch) {
             handleHighRisk();
             stopListening();
             return;
         }
 
-        const isLowRisk = results.some(res =>
-            keywordsRef.current.low.some(kw => res.toLowerCase().includes(kw))
+        const lowMatch = results.find(res =>
+            keywordsRef.current.low.some(kw => {
+                const found = res.toLowerCase().includes(kw);
+                if (found) triggeredKeywordRef.current = kw;
+                return found;
+            })
         );
 
-        if (isLowRisk) {
+        if (lowMatch) {
             handleLowRisk();
             stopListening();
             return;
@@ -278,62 +287,29 @@ export default function EmergencyMonitor() {
         console.log("Executing LOW RISK action...");
         try {
             const email = await AsyncStorage.getItem("userEmail");
-
-            // Location — never abort if it fails
-            let lat: number | null = null;
-            let lon: number | null = null;
-            try {
-                const { status } = await Location.requestForegroundPermissionsAsync();
-                if (status === 'granted') {
-                    const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-                    lat = loc.coords.latitude;
-                    lon = loc.coords.longitude;
-                }
-            } catch (err) {
-                console.log("Location fetch failed:", err);
+            const locStr = await getLocationString();
+            
+            let lat = null, lon = null;
+            if (locStr.includes('?q=')) {
+                const coords = locStr.split('?q=')[1].split(',');
+                lat = coords[0];
+                lon = coords[1];
             }
 
             if (email) {
-                const contactResponse = await fetch(`${BASE_URL}/contacts/${email}`);
-                if (contactResponse.ok) {
-                    const data = await contactResponse.json();
-                    const contacts = Array.isArray(data) ? data : (Array.isArray(data.contacts) ? data.contacts : []);
-
-                    if (contacts.length > 0) {
-                        let closestContact = contacts[0];
-                        let minDistance = Infinity;
-                        contacts.forEach((c: any) => {
-                            if (lat !== null && lon !== null && c.latitude && c.longitude) {
-                                const d = haversine(
-                                    { latitude: lat, longitude: lon },
-                                    { latitude: parseFloat(c.latitude), longitude: parseFloat(c.longitude) }
-                                );
-                                if (d < minDistance) { minDistance = d; closestContact = c; }
-                            }
-                        });
-
-                        if (closestContact?.phone && Platform.OS === 'android') {
-                            try {
-                                const granted = await PermissionsAndroid.request(
-                                    PermissionsAndroid.PERMISSIONS.CALL_PHONE
-                                );
-                                if (granted === PermissionsAndroid.RESULTS.GRANTED) {
-                                    IntentLauncher.startActivityAsync('android.intent.action.CALL', {
-                                        data: `tel:${closestContact.phone}`
-                                    }).catch(e => console.log("Call failed", e));
-                                }
-                            } catch (err) { console.warn(err); }
-                        }
-                    }
-
-                    const sosRes = await fetch(`${BASE_URL}/send-sos`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ email, latitude: lat, longitude: lon }),
-                    });
-                    const sosData = await sosRes.json();
-                    console.log(sosRes.ok ? "✅ LOW RISK emails sent:" : "❌ LOW RISK SOS failed:", sosData.message);
-                }
+                const sosRes = await fetch(`${BASE_URL}/send-sos`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ 
+                        email, 
+                        latitude: lat, 
+                        longitude: lon,
+                        keyword: triggeredKeywordRef.current,
+                        risk_level: 'LOW' 
+                    }),
+                });
+                const sosData = await sosRes.json();
+                console.log("✅ LOW RISK SOS response:", sosData.message);
             }
         } catch (error) {
             console.error("Error in LOW RISK sequence:", error);
@@ -361,6 +337,9 @@ export default function EmergencyMonitor() {
         // Start recording IMMEDIATELY
         startHighRiskRecording();
 
+        // Start alerts and sequential calls
+        executeHighRiskAlertsAndCalls();
+
         // After 10 seconds, if not cancelled → proceed with alerts
         highCancelTimeoutRef.current = setTimeout(() => {
             clearInterval(highTimerIntervalRef.current!);
@@ -373,6 +352,61 @@ export default function EmergencyMonitor() {
     };
 
 
+
+    const executeHighRiskAlertsAndCalls = async () => {
+        try {
+            const email = await AsyncStorage.getItem("userEmail");
+            const userId = await AsyncStorage.getItem("userId");
+            const locStr = await getLocationString();
+            
+            let lat = null, lon = null;
+            if (locStr.includes('?q=')) {
+                const coords = locStr.split('?q=')[1].split(',');
+                lat = coords[0];
+                lon = coords[1];
+            }
+
+            // 1. Send High-Risk Email immediately (during recording)
+            if (email) {
+                await fetch(`${BASE_URL}/send-sos`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ email, latitude: lat, longitude: lon, keyword: triggeredKeywordRef.current, risk_level: 'HIGH' }),
+                });
+            }
+
+            // 2. Automated calling one by one
+            const contactResponse = await fetch(`${BASE_URL}/getTrustedContacts/${userId}`);
+            const contacts = await contactResponse.json();
+
+            if (Array.isArray(contacts)) {
+                for (const c of contacts) {
+                    if (c.trusted_no && !isCancelledRef.current) {
+                        console.log(`📞 Sequential Calling: ${c.trusted_name} (${c.trusted_no})`);
+                        await triggerCall(c.trusted_no);
+                        await new Promise(res => setTimeout(res, 9000)); // Delay between dials
+                    }
+                }
+            }
+        } catch (err) {
+            console.error("High risk alerts/calls error:", err);
+        }
+    };
+
+    const triggerCall = async (phone: string) => {
+        if (Platform.OS === 'android') {
+            try {
+                const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.CALL_PHONE);
+                if (granted === PermissionsAndroid.RESULTS.GRANTED) {
+                    await IntentLauncher.startActivityAsync('android.intent.action.CALL', {
+                        data: `tel:${phone}`
+                    });
+                }
+            } catch (e) {
+                console.log("Call failed:", e);
+            }
+        }
+    };
 
     const cancelHighRiskAlert = () => {
         isCancelledRef.current = true;
@@ -401,7 +435,15 @@ export default function EmergencyMonitor() {
         }
 
         await Audio.requestPermissionsAsync();
-        await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+        await Audio.setAudioModeAsync({ 
+            allowsRecordingIOS: true, 
+            playsInSilentModeIOS: true,
+            staysActiveInBackground: true,
+            playThroughEarpieceAndroid: false
+        });
+
+        // Start Separate Audio Recording for redundancy/evidence
+        startAudioOnlyRecording();
 
         // Show hidden camera view for recording
         setCameraFacing('back');
@@ -422,13 +464,18 @@ export default function EmergencyMonitor() {
             const videoPromise = cameraRef.current.recordAsync();
 
 
-            // Switch camera ONLY if a blank (dark) screen is detected after 3 seconds
-            setTimeout(async () => {
-                if (videoRecordingRef.current && luxRef.current < 5) { // < 5 lux = very dark/blank
-                    console.log("🌑 Blank screen detected (Low light)! Switching to front camera.");
+            // Periodic check for blank screen
+            const checkBlankInterval = setInterval(async () => {
+                if (!videoRecordingRef.current) {
+                    clearInterval(checkBlankInterval);
+                    return;
+                }
+                
+                if (luxRef.current < 5) { // < 5 lux = very dark/blank
+                    console.log("🌑 Blank screen/Low light detected (2s)! Switching camera.");
                     setCameraFacing(prev => prev === 'back' ? 'front' : 'back');
                 }
-            }, 3000);
+            }, 2000); // Check every 2 seconds
 
 
             const videoResult = await videoPromise;
@@ -481,7 +528,7 @@ export default function EmergencyMonitor() {
     const startAudioOnlyRecording = async () => {
         console.log("🎙️ Starting audio-only recording as fallback...");
         try {
-            await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+            // audio mode is already set in startHighRiskRecording or setup
             const recording = new Audio.Recording();
             audioRecordingRef.current = recording;
             await recording.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
@@ -518,8 +565,8 @@ export default function EmergencyMonitor() {
             const { signature, timestamp, cloud_name, api_key } = await sigRes.json();
 
             // 2. Prepare Direct Upload FormData
-            const extension = type === 'video' ? 'mp4' : 'm4a';
-            const mimeType = type === 'video' ? 'video/mp4' : 'audio/m4a';
+            const extension = localUri.split('.').pop() || (type === 'video' ? 'mp4' : 'm4a');
+            const mimeType = type === 'video' ? `video/${extension}` : `audio/${extension === 'm4a' ? 'm4a' : 'mpeg'}`;
             const fileName = `emergency_${type}_${Date.now()}.${extension}`;
 
             const formData = new FormData();
@@ -534,8 +581,9 @@ export default function EmergencyMonitor() {
             formData.append('folder', 'shield_emergency_records');
 
             // 3. Upload TO CLOUDINARY Directly
+            // Use 'video' resource type for both video and audio in Cloudinary
             console.log(`☁️ Direct Cloudinary Upload (${type})...`);
-            const cloudRes = await fetch(`https://api.cloudinary.com/v1_1/${cloud_name}/${type}/upload`, {
+            const cloudRes = await fetch(`https://api.cloudinary.com/v1_1/${cloud_name}/video/upload`, {
                 method: 'POST',
                 body: formData,
             });
@@ -563,7 +611,7 @@ export default function EmergencyMonitor() {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         user_id: userId,
-                        keyword: "HIGH-RISK DETECTED",
+                        keyword: triggeredKeywordRef.current || "HIGH-RISK DETECTED",
                         location_link: locationStr,
                         recording_url: cloudData.secure_url,
                         cloudinary_public_id: cloudData.public_id,

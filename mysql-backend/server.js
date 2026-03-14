@@ -425,60 +425,51 @@ app.listen(PORT, () => {
 
 
 app.post("/send-sos", async (req, res) => {
-  const { email, latitude, longitude } = req.body;
+  const { email, latitude, longitude, keyword, risk_level } = req.body;
 
   try {
-    // 1️⃣ Get user info
     const [userRows] = await db.promise().query(
-      "SELECT id, name FROM users WHERE email = ?",
-      [email]
+      "SELECT id, name FROM users WHERE email = ?", [email]
     );
 
-    if (userRows.length === 0) {
-      return res.status(404).json({ message: "User not found" });
-    }
+    if (userRows.length === 0) return res.status(404).json({ message: "User not found" });
 
     const userId = userRows[0].id;
     const userName = userRows[0].name;
 
-    // 2️⃣ Get trusted contacts with valid emails
     const [contacts] = await db.promise().query(
       "SELECT contact_email FROM contacts WHERE user_id = ? AND contact_email IS NOT NULL AND contact_email != ''",
       [userId]
     );
 
-    if (contacts.length === 0) {
-      return res.status(400).json({ message: "No trusted emails found" });
+    if (contacts.length === 0) return res.status(400).json({ message: "No trusted emails found" });
+
+    const recipients = contacts.map(c => c.contact_email).filter(Boolean);
+    const timestamp = new Date().toLocaleString();
+
+    let subject = "Low Risk Alert – SHIELD Safety Notification";
+    let body = `A low-risk keyword was detected.\n\nUser ID: ${userId}\nDetected Keyword: ${keyword || 'Low-Risk Detected'}\nTime: ${timestamp}\n\nLive Location:\nhttps://maps.google.com/?q=${latitude},${longitude}\n\nThis is only a precautionary alert.`;
+
+    if (risk_level === 'HIGH') {
+      subject = "EMERGENCY ALERT – Possible danger detected";
+      body = `A high-risk keyword was detected from the SHIELD safety app.\n\nUser ID: ${userId}\nDetected Keyword: ${keyword}\nTime: ${timestamp}\n\nLive Location:\nhttps://maps.google.com/?q=${latitude},${longitude}\n\nPlease contact the user immediately. Calling contacts now.`;
     }
 
-    // 3️⃣ Extract recipient emails safely
-    const recipients = contacts
-      .map(c => c.contact_email)
-      .filter(Boolean);
-
-    if (recipients.length === 0) {
-      return res.status(400).json({ message: "No valid emails found" });
-    }
-
-    // 4️⃣ Setup transporter
-    const transporter = nodemailer.createTransport({
-      service: "gmail",
-      auth: {
-        user: "krishnanjalys98@gmail.com",   // your gmail
-        pass: "errlarajtydhopyn",            // app password
-      },
-    });
-
-    // 5️⃣ Send single email to all contacts
-    const mapLink = latitude && longitude ? `\n\nLive Location:\nhttps://www.google.com/maps?q=${latitude},${longitude}` : "";
     await transporter.sendMail({
-      from: "krishnanjalys98@gmail.com",
-      to: recipients, // array of emails
-      subject: "🚨 EMERGENCY ALERT - SHIELD",
-      text: `${userName} has triggered an SOS emergency alert!${mapLink}\n\nPlease contact them immediately.`,
+      from: `"SHIELD Guardian" <${process.env.EMAIL_USER}>`,
+      to: recipients,
+      subject: subject,
+      text: body,
     });
 
-    res.json({ message: "SOS emails sent successfully" });
+    // Log to DB
+    await db.promise().query(
+      `INSERT INTO emergency_incidents (user_id, detected_keyword, location_url, status)
+       VALUES (?, ?, ?, ?)`,
+      [userId, keyword || "SOS", `https://maps.google.com/?q=${latitude},${longitude}`, risk_level === 'HIGH' ? "HIGH_RISK_SOS_SENT" : "LOW_RISK_ALERT_SENT"]
+    );
+
+    res.json({ message: `${risk_level} alert sent successfully` });
 
   } catch (err) {
     console.error("SOS Error:", err);
@@ -838,9 +829,9 @@ app.get("/recordings/:email", async (req, res) => {
     if (userRows.length === 0) return res.status(404).json({ message: "User not found" });
 
     const [rows] = await db.promise().query(
-      `(SELECT id, type, url, recorded_at FROM emergency_recordings WHERE user_id = ?)
+      `(SELECT id, type, url, recorded_at, '' as keyword, '' as location FROM emergency_recordings WHERE user_id = ?)
        UNION
-       (SELECT id, 'video' as type, recording_url as url, created_at as recorded_at FROM emergency_incidents WHERE user_id = ? AND recording_url IS NOT NULL)
+       (SELECT id, 'video' as type, recording_url as url, created_at as recorded_at, detected_keyword as keyword, location_url as location FROM emergency_incidents WHERE user_id = ? AND recording_url IS NOT NULL)
        ORDER BY recorded_at DESC`,
       [userRows[0].id, userRows[0].id]
     );
@@ -891,33 +882,13 @@ app.post("/trigger-emergency-protocol", async (req, res) => {
       .filter(email => email && email.trim() !== "");
 
     if (recipients.length > 0) {
-      // 3. Send SOS Email via Nodemailer
+      const timestamp = new Date().toLocaleString();
+      // ── HIGH-RISK EMAIL ──
       const mailOptions = {
-        from: `"SHIELD Emergency" <${process.env.EMAIL_USER}>`,
+        from: `"SHIELD Guardian" <${process.env.EMAIL_USER}>`,
         to: recipients,
-        subject: "🚨 HIGH-RISK EMERGENCY ALERT - SHIELD",
-        html: `
-          <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;border:3px solid #ec1313;border-radius:15px;overflow:hidden">
-            <div style="background:#ec1313;padding:25px;text-align:center">
-              <h1 style="color:#fff;margin:0;font-size:26px">🚨 HIGH-RISK ALERT 🚨</h1>
-            </div>
-            <div style="padding:30px;background:#1a0f0f;color:#fff">
-              <p style="font-size:18px"><strong>${userName}</strong> is in a potential high-risk situation.</p>
-              <div style="background:rgba(236,19,19,0.1);border-left:5px solid #ec1313;padding:15px;margin:20px 0;border-radius:5px">
-                <p style="margin:0">📍 <strong>Live Location:</strong><br/>
-                <a href="${location_link}" style="color:#ec1313;font-weight:bold;text-decoration:none">${location_link}</a></p>
-              </div>
-              <p>📹 <strong>Emergency Evidence (Recording):</strong><br/>
-                <a href="${recording_url}" style="color:#ec1313;word-break:break-all">${recording_url}</a>
-              </p>
-              <hr style="border:0;border-top:1px solid #333;margin:20px 0"/>
-              <p style="text-align:center;font-style:italic">Please check on them immediately.</p>
-            </div>
-            <div style="background:#000;padding:15px;text-align:center">
-              <p style="color:#666;font-size:12px;margin:0">Sent automatically by SHIELD Safety AI</p>
-            </div>
-          </div>
-        `
+        subject: "EMERGENCY ALERT – Possible danger detected",
+        text: `A high-risk keyword was detected from the SHIELD safety app.\n\nUser ID: ${user_id}\nDetected Keyword: ${keyword}\nTime: ${timestamp}\n\nLive Location:\n${location_link}\n\nRecording Evidence: ${recording_url}\n\nPlease contact the user immediately.`
       };
 
       await transporter.sendMail(mailOptions);
@@ -930,10 +901,10 @@ app.post("/trigger-emergency-protocol", async (req, res) => {
     await db.promise().query(
       `INSERT INTO emergency_incidents (user_id, detected_keyword, location_url, recording_url, contacts_notified, status, cloudinary_public_id)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [user_id, keyword, location_link, recording_url, JSON.stringify(contacts), "EMAIL_SENT", cloudinary_public_id]
+      [user_id || null, keyword || "DETECTION", location_link || "Unknown", recording_url || "", JSON.stringify(contacts || []), "EMAIL_SENT", cloudinary_public_id || null]
     );
 
-    res.json({ success: true, message: "Emergency email alerts sent and logged." });
+    res.json({ success: true, message: "Emergency alerts sent and recorded." });
   } catch (error) {
     console.error("Emergency Protocol Error:", error);
     res.status(500).json({ success: false, message: "Failed to trigger email protocol" });
@@ -993,6 +964,22 @@ app.put("/emergency-incident/:id", async (req, res) => {
   } catch (err) {
     console.error("Update Incident Error:", err);
     res.status(500).json({ message: "Update failed" });
+  }
+});
+/* ===================================================
+   🔹 DELETE RECORDING (from emergency_recordings)
+=================================================== */
+app.delete("/delete-recording/:id", async (req, res) => {
+  const { id } = req.params;
+  try {
+    // 1. Get URL to maybe delete from Cloudinary?
+    // (If we store public_id it's better, but let's just delete the DB record for now
+    // as we didn't store public_id for all history).
+    await db.promise().query("DELETE FROM emergency_recordings WHERE id = ?", [id]);
+    res.json({ success: true, message: "Recording deleted successfully" });
+  } catch (err) {
+    console.error("Delete Recording Error:", err);
+    res.status(500).json({ message: "Delete failed" });
   }
 });
 
