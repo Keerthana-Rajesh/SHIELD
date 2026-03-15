@@ -253,15 +253,15 @@ export default function Dashboard() {
         console.log("Location request failed, proceeding without location:", locErr);
       }
 
-      // 3️⃣ Fetch trusted contacts from backend
-      const contactResponse = await fetch(`${BASE_URL}/contacts/${email}`);
+      // 3️⃣ Fetch trusted contacts from backend (Trusted Circles)
+      const userId = await AsyncStorage.getItem("userId") || "U101";
+      const contactResponse = await fetch(`${BASE_URL}/getTrustedContacts/${userId}`);
 
       if (!contactResponse.ok) {
         throw new Error(`Failed to fetch contacts: HTTP ${contactResponse.status}`);
       }
 
-      const data = await contactResponse.json();
-      const contacts = Array.isArray(data) ? data : (Array.isArray(data.contacts) ? data.contacts : []);
+      const contacts = await contactResponse.json();
 
       // (NEW) 3B -> Find closest contact based on latitude and longitude
       if (contacts.length > 0) {
@@ -272,7 +272,8 @@ export default function Dashboard() {
           if (c.latitude && c.longitude) {
             const distance = haversine(
               { latitude: lat, longitude: lon },
-              { latitude: parseFloat(c.latitude), longitude: parseFloat(c.longitude) }
+              { latitude: parseFloat(c.latitude), longitude: parseFloat(c.longitude) },
+              { unit: 'mile' }
             );
 
             if (distance < minDistance) {
@@ -282,36 +283,24 @@ export default function Dashboard() {
           }
         });
 
-        if (closestContact?.phone) {
-          console.log("Calling closest contact: ", closestContact.phone);
+        if (closestContact?.trusted_no) {
+          console.log("Calling closest contact: ", closestContact.trusted_no);
 
           if (Platform.OS === 'android') {
             try {
               const granted = await PermissionsAndroid.request(
-                PermissionsAndroid.PERMISSIONS.CALL_PHONE,
-                {
-                  title: 'Emergency Call Permission',
-                  message: 'SHIELD needs access to make automatic emergency calls.',
-                  buttonNeutral: 'Ask Me Later',
-                  buttonNegative: 'Cancel',
-                  buttonPositive: 'OK',
-                }
+                PermissionsAndroid.PERMISSIONS.CALL_PHONE
               );
 
               if (granted === PermissionsAndroid.RESULTS.GRANTED) {
                 console.log('CALL_PHONE permission granted. Dialing directly...');
                 IntentLauncher.startActivityAsync('android.intent.action.CALL', {
-                  data: `tel:${closestContact.phone}`
+                  data: `tel:${closestContact.trusted_no}`
                 }).catch((e) => { console.log("Call failed", e) });
-              } else {
-                console.log('CALL_PHONE permission denied.');
               }
             } catch (err) {
               console.warn(err);
             }
-          } else {
-            // iOS is restricted, but the user is on Android so it's fine
-            console.log("iOS background calling is restricted.");
           }
         }
       }

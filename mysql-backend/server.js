@@ -641,6 +641,7 @@ app.post("/addTrustedContact", (req, res) => {
     user_id,
     trusted_name,
     trusted_no,
+    email,
     relationship_type,
     latitude,
     longitude
@@ -648,12 +649,12 @@ app.post("/addTrustedContact", (req, res) => {
 
   const sql = `
     INSERT INTO Trusted_Contact
-    (user_id, trusted_name, trusted_no, relationship_type, latitude, longitude)
-    VALUES (?, ?, ?, ?, ?, ?)
+    (user_id, trusted_name, trusted_no, email, relationship_type, latitude, longitude)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
     `;
 
   db.query(sql,
-    [user_id, trusted_name, trusted_no, relationship_type, latitude, longitude],
+    [user_id, trusted_name, trusted_no, email, relationship_type, latitude, longitude],
     (err, result) => {
 
       if (err) {
