@@ -75,7 +75,7 @@ export default function EmergencyScreen() {
             {/* Footer */}
             <View style={styles.footer}>
                 <TouchableOpacity style={styles.safeButton} onPress={handleSafe}>
-                    <Text style={styles.safeText}>I'M SAFE</Text>
+                    <Text style={styles.safeText}>I&apos;M SAFE</Text>
                 </TouchableOpacity>
 
                 <Text style={styles.helperText}>

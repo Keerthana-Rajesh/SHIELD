@@ -71,9 +71,6 @@ export default function FakeCallSetup() {
     { name: "Best Friend" },
   ];
   const directory = FileSystem.documentDirectory;
-  if (!directory) return;
-
-  const newPath: string = directory + `voice-${Date.now()}.m4a`;
 
   // ===============================
   // 🗣 PRESET VOICES
@@ -89,13 +86,6 @@ export default function FakeCallSetup() {
     name: string;
     uri: string;
     isSelected: boolean;
-  };
-
-  const newVoice = {
-    id: Date.now(),
-    name: `Recorded Voice ${savedVoices.length + 1}`,
-    uri: newPath as string,
-    isSelected: false,
   };
 
   // -----------------------------
@@ -136,9 +126,24 @@ export default function FakeCallSetup() {
     })();
   }, []);
 
+  // Early return after hooks
+  if (!directory) {
+    return null;
+  }
+
+  const newPath: string = directory + `voice-${Date.now()}.m4a`;
+
+  const newVoice = {
+    id: Date.now(),
+    name: `Recorded Voice ${savedVoices.length + 1}`,
+    uri: newPath as string,
+    isSelected: false,
+  };
+
   // -----------------------------
   // Duration Timer
   // -----------------------------
+
   useEffect(() => {
     if (recordingMode === "recording") {
       durationIntervalRef.current = setInterval(() => {

@@ -995,14 +995,79 @@ app.put("/emergency-incident/:id", async (req, res) => {
 app.delete("/delete-recording/:id", async (req, res) => {
   const { id } = req.params;
   try {
-    // 1. Get URL to maybe delete from Cloudinary?
-    // (If we store public_id it's better, but let's just delete the DB record for now
-    // as we didn't store public_id for all history).
+    // 1. Get recording details including Cloudinary URL
+    const [recording] = await db.promise().query(
+      "SELECT url FROM emergency_recordings WHERE id = ?",
+      [id]
+    );
+    
+    // 2. Delete from database first
     await db.promise().query("DELETE FROM emergency_recordings WHERE id = ?", [id]);
+    
+    // 3. If recording has Cloudinary URL, also delete from Cloudinary
+    if (recording && recording[0] && recording[0].url && recording[0].url.includes('cloudinary')) {
+      try {
+        // Extract public_id from Cloudinary URL
+        const urlParts = recording[0].url.split('/');
+        const fileNameWithExt = urlParts[urlParts.length - 1];
+        const publicId = fileNameWithExt.split('.')[0]; // Remove file extension
+        
+        console.log(`🗑️ Also deleting from Cloudinary: ${publicId}`);
+        
+        // Delete from Cloudinary
+        const result = await cloudinary.uploader.destroy(publicId);
+        
+        if (result.result === 'ok' || result.result === 'not found') {
+          console.log(`✅ Cloudinary file deleted: ${publicId}`);
+        } else {
+          console.warn(`⚠️ Cloudinary deletion issue: ${result.result}`);
+        }
+      } catch (cloudinaryErr) {
+        console.warn('⚠️ Cloudinary deletion error:', cloudinaryErr);
+        // Don't fail the whole operation if Cloudinary deletion fails
+      }
+    }
+    
     res.json({ success: true, message: "Recording deleted successfully" });
   } catch (err) {
     console.error("Delete Recording Error:", err);
     res.status(500).json({ message: "Delete failed" });
+  }
+});
+
+/* ===================================================
+  🔹 DELETE FROM CLOUDINARY (by public_id)
+=================================================== */
+app.delete("/delete-cloudinary/:publicId", async (req, res) => {
+  const { publicId } = req.params;
+  try {
+    console.log(`🗑️ Deleting Cloudinary file with public_id: ${publicId}`);
+    
+    // Delete from Cloudinary
+    const result = await cloudinary.uploader.destroy(publicId);
+    
+    if (result.result === 'ok' || result.result === 'not found') {
+      console.log(`✅ Cloudinary file deleted: ${publicId}`);
+      res.json({ 
+        success: true, 
+        message: "Cloudinary file deleted successfully",
+        result: result.result 
+      });
+    } else {
+      console.warn(`⚠️ Cloudinary deletion issue: ${result.result}`);
+      res.status(400).json({ 
+        success: false, 
+        message: "Cloudinary deletion failed",
+        result: result.result 
+      });
+    }
+  } catch (err) {
+    console.error("Cloudinary Delete Error:", err);
+    res.status(500).json({ 
+      success: false, 
+      message: "Cloudinary deletion failed",
+      error: err.message 
+    });
   }
 });
 

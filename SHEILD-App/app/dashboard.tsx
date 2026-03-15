@@ -20,6 +20,10 @@ import { fetchKeywords } from "../services/keywordService";
 import { DeviceEventEmitter } from "react-native";
 import EmergencyOverlay from "../components/EmergencyOverlay";
 import * as IntentLauncher from 'expo-intent-launcher';
+import { Audio } from 'expo-av';
+import { aiRiskEngine, RiskAnalysis } from "../utils/AiRiskEngine";
+import Voice from "@react-native-voice/voice";
+import { ActivityService, Activity } from "../services/ActivityService";
 
 export default function Dashboard() {
   const router = useRouter();
@@ -27,6 +31,11 @@ export default function Dashboard() {
   const [lowKeywords, setLowKeywords] = useState<string[]>([]);
   const [highKeywords, setHighKeywords] = useState<string[]>([]);
   const [overlayVisible, setOverlayVisible] = useState(false);
+  const [micStatus, setMicStatus] = useState("Inactive");
+  const [locationStatus, setLocationStatus] = useState("Off");
+  const [sensorStatus, setSensorStatus] = useState("Locked");
+  const [airisk, setAiRisk] = useState<RiskAnalysis | null>(null);
+  const [recentActivities, setRecentActivities] = useState<Activity[]>([]);
 
   useEffect(() => {
 
@@ -54,9 +63,26 @@ export default function Dashboard() {
       setOverlayVisible(false);
     });
 
+    const loadActivities = async () => {
+      const data = await ActivityService.getActivities();
+      setRecentActivities(data.slice(0, 3)); // Only show top 3 on dashboard
+    };
+
+    loadActivities();
+
+    const sub3 = DeviceEventEmitter.addListener("AI_RISK_DETECTED", (analysis: RiskAnalysis) => {
+      setAiRisk(analysis);
+      loadActivities(); // Refresh list when new event happens
+      setTimeout(() => setAiRisk(prev => prev?.sensorData.timestamp === analysis.sensorData.timestamp ? null : prev), 10000);
+    });
+
+    const sub4 = DeviceEventEmitter.addListener("ACTIVITY_UPDATED", loadActivities);
+
     return () => {
       sub1.remove();
       sub2.remove();
+      sub3.remove();
+      sub4.remove();
     };
 
   }, []);
@@ -82,9 +108,126 @@ export default function Dashboard() {
     checkLogin();
   }, []);
 
+  // 📡 SYSTEM STATUS LOGIC
+  const [micEnabled, setMicEnabled] = useState(true);
+  const [locEnabled, setLocEnabled] = useState(true);
+  const [snsEnabled, setSnsEnabled] = useState(true);
+
+  useEffect(() => {
+    const loadToggles = async () => {
+      const m = await AsyncStorage.getItem("MIC_ENABLED");
+      const l = await AsyncStorage.getItem("LOCATION_ENABLED");
+      const s = await AsyncStorage.getItem("SENSORS_ENABLED");
+      if (m !== null) setMicEnabled(m === "true");
+      if (l !== null) setLocEnabled(l === "true");
+      if (s !== null) setSnsEnabled(s === "true");
+    };
+    loadToggles();
+  }, []);
+
+  const toggleMic = async () => {
+    const newVal = !micEnabled;
+    setMicEnabled(newVal);
+    await AsyncStorage.setItem("MIC_ENABLED", newVal.toString());
+    if (!newVal) {
+      await Voice.stop();
+      await aiRiskEngine.stopFullAnalysis(); // Mic is part of full analysis
+    }
+    DeviceEventEmitter.emit("STATUS_TOGGLE_CHANGED");
+  };
+
+  const toggleLocation = async () => {
+    const newVal = !locEnabled;
+    setLocEnabled(newVal);
+    await AsyncStorage.setItem("LOCATION_ENABLED", newVal.toString());
+    DeviceEventEmitter.emit("STATUS_TOGGLE_CHANGED");
+  };
+
+  const toggleSensors = async () => {
+    const newVal = !snsEnabled;
+    setSnsEnabled(newVal);
+    await AsyncStorage.setItem("SENSORS_ENABLED", newVal.toString());
+    if (newVal) {
+      aiRiskEngine.startMonitoring();
+    } else {
+      aiRiskEngine.stopMonitoring();
+    }
+    DeviceEventEmitter.emit("STATUS_TOGGLE_CHANGED");
+  };
+
+  useEffect(() => {
+    const updateStatuses = async () => {
+      // 1. Microphone Status
+      if (!micEnabled) {
+        setMicStatus("Off");
+      } else {
+        try {
+          const { status: audioPerm } = await Audio.getPermissionsAsync();
+          if (audioPerm !== "granted") {
+            setMicStatus("Disabled");
+          } else {
+            const isEngineAnalyzing = aiRiskEngine.isAnalysisActive();
+            if (isEngineAnalyzing) {
+              setMicStatus("Listening");
+            } else {
+              setMicStatus("Active");
+            }
+          }
+        } catch (e) {
+          setMicStatus("Disabled");
+        }
+      }
+
+      // 2. Location Status
+      if (!locEnabled) {
+        setLocationStatus("Off");
+      } else {
+        try {
+          const { status: locPerm } = await Location.getForegroundPermissionsAsync();
+          if (locPerm === "granted") {
+            if (overlayVisible || aiRiskEngine.isMonitoringActive()) {
+              setLocationStatus("Shared");
+            } else {
+              setLocationStatus("Ready");
+            }
+          } else {
+            setLocationStatus("Off");
+          }
+        } catch (e) {
+          setLocationStatus("Off");
+        }
+      }
+
+      // 3. Sensor Status
+      if (!snsEnabled) {
+        setSensorStatus("Off");
+      } else {
+        if (aiRiskEngine.isAnalysisActive()) {
+          setSensorStatus("Analyzing");
+        } else if (aiRiskEngine.isMonitoringActive()) {
+          setSensorStatus("Monitoring");
+        } else {
+          setSensorStatus("Locked");
+        }
+      }
+    };
+
+    updateStatuses();
+    const interval = setInterval(updateStatuses, 3000);
+
+    return () => clearInterval(interval);
+  }, [overlayVisible, micEnabled, locEnabled, snsEnabled]);
+
   const handleSOS = async () => {
     try {
       const email = await AsyncStorage.getItem("userEmail");
+
+      ActivityService.logActivity({
+        type: 'SOS',
+        level: 'HIGH',
+        title: 'Manual SOS Triggered',
+        details: 'User initiated SOS via long press button'
+      });
 
       // 1️⃣ Get location permission
       const { status } = await Location.requestForegroundPermissionsAsync();
@@ -319,22 +462,65 @@ export default function Dashboard() {
 
         {/* Status Cards */}
         <View style={styles.cardRow}>
-          <StatusCard icon="mic" label="Mic" value="Active" />
-          <StatusCard icon="location-on" label="Location" value="Shared" />
-          <StatusCard icon="sensors" label="Sensors" value="Locked" />
+          <StatusCard icon="mic" label="Mic" value={micStatus} onPress={toggleMic} />
+          <StatusCard icon="location-on" label="Location" value={locationStatus} onPress={toggleLocation} />
+          <StatusCard icon="sensors" label="Sensors" value={sensorStatus} onPress={toggleSensors} />
         </View>
 
         {/* AI Banner */}
-        <View style={styles.aiBanner}>
-          <View style={styles.aiIcon}>
-            <MaterialIcons name="smart-toy" size={22} color="#ec1313" />
+        <View style={[
+          styles.aiBanner,
+          airisk?.riskLevel === 'HIGH' ? { backgroundColor: 'rgba(236,19,19,0.2)', borderColor: '#ec1313' } :
+            airisk?.riskLevel === 'LOW' ? { backgroundColor: 'rgba(234,179,8,0.1)', borderColor: '#eab308' } : {}
+        ]}>
+          <View style={[
+            styles.aiIcon,
+            airisk?.riskLevel === 'HIGH' ? { backgroundColor: 'rgba(236,19,19,0.3)' } :
+              airisk?.riskLevel === 'LOW' ? { backgroundColor: 'rgba(234,179,8,0.2)' } : {}
+          ]}>
+            <MaterialIcons
+              name={airisk?.riskLevel === 'HIGH' ? "warning" : airisk?.riskLevel === 'LOW' ? "error-outline" : "smart-toy"}
+              size={22}
+              color={airisk?.riskLevel === 'HIGH' ? "#ec1313" : airisk?.riskLevel === 'LOW' ? "#eab308" : "#ec1313"}
+            />
           </View>
-          <View>
-            <Text style={styles.aiTitle}>AI Guardian is analyzing</Text>
-            <Text style={styles.aiSub}>
-              Silent mode enabled. No threats detected.
+          <View style={{ flex: 1 }}>
+            <Text style={styles.aiTitle}>
+              {airisk?.riskLevel === 'HIGH' ? "HIGH RISK DETECTED" :
+                airisk?.riskLevel === 'LOW' ? "POSSIBLE THREAT DETECTED" :
+                  !snsEnabled ? "AI Guardian is Offline" :
+                    "AI Guardian is Monitoring"}
+            </Text>
+            <Text style={styles.aiSub} numberOfLines={1} adjustsFontSizeToFit>
+              {airisk?.triggers.length ? airisk.triggers.join(", ") :
+                !snsEnabled ? "Sensors are manually disabled." :
+                  "Silent mode enabled. No threats detected."}
             </Text>
           </View>
+        </View>
+
+        <View style={styles.activitySection}>
+          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <Text style={styles.activityTitle}>RECENT ACTIVITY</Text>
+            <TouchableOpacity onPress={() => router.push("/log")}>
+              <Text style={{ color: "#ec1313", fontSize: 10 }}>VIEW ALL</Text>
+            </TouchableOpacity>
+          </View>
+
+          {recentActivities.length > 0 ? (
+            recentActivities.map(act => (
+              <ActivityItem
+                key={act.id}
+                icon={act.type === 'AI_RISK' ? "smart-toy" : act.type === 'KEYWORD' ? "mic" : "warning"}
+                text={act.title}
+                time={new Date(act.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              />
+            ))
+          ) : (
+            <Text style={{ color: "#666", fontSize: 12, textAlign: "center", fontStyle: "italic", marginVertical: 10 }}>
+              No recent security logs.
+            </Text>
+          )}
         </View>
 
         <View style={styles.featureGrid}>
@@ -346,8 +532,9 @@ export default function Dashboard() {
           <FeatureButton icon="call" label="Helpline Numbers" route="/helpline" />
           <FeatureButton icon="storage" label="Cloud Storage" route="/cloud-storage" />
           <FeatureButton icon="verified-user" label="Trusted Circles" route="/trustedCircles" />
-          <FeatureButton icon="report" label="About" route="/report" />
           <FeatureButton icon="smart-toy" label="AI Guardian" route="/guardian" />
+          <FeatureButton icon="history" label="Recent Activity" route="/log" />
+          <FeatureButton icon="report" label="About" route="/report" />
 
         </View>
 
@@ -389,13 +576,46 @@ export default function Dashboard() {
 
 /* ---------------- COMPONENTS ---------------- */
 
-const StatusCard = ({ icon, label, value }: any) => (
-  <View style={styles.card}>
-    <MaterialIcons name={icon} size={22} color="#ec1313" />
-    <Text style={styles.cardLabel}>{label}</Text>
-    <Text style={styles.cardValue}>{value}</Text>
-  </View>
-);
+const StatusCard = ({ icon, label, value, onPress }: any) => {
+  const getStatusColor = (val: string) => {
+    switch (val) {
+      case "Active":
+      case "Shared":
+      case "Monitoring":
+      case "Listening":
+      case "Analyzing":
+        return "#22c55e"; // Green
+      case "Locked":
+      case "Ready":
+        return "#eab308"; // Yellow
+      case "Disabled":
+      case "Off":
+        return "#ec1313"; // Red
+      default:
+        return "#aaa";
+    }
+  };
+
+  const statusColor = getStatusColor(value);
+
+  return (
+    <TouchableOpacity
+      style={styles.card}
+      onPress={onPress}
+      activeOpacity={0.7}
+    >
+      <MaterialIcons name={icon} size={22} color={statusColor} />
+      <Text style={styles.cardLabel}>{label}</Text>
+      <Text
+        style={[styles.cardValue, { color: statusColor }]}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+      >
+        {value}
+      </Text>
+    </TouchableOpacity>
+  );
+};
 
 const ActivityItem = ({ icon, text, time }: any) => (
   <View style={styles.activityItem}>
@@ -571,7 +791,7 @@ const styles = StyleSheet.create({
   cardValue: {
     color: "#fff",
     fontWeight: "bold",
-    fontSize: 14,
+    fontSize: 12,
   },
 
   aiBanner: {

@@ -4,15 +4,51 @@ import {
     StyleSheet,
     TouchableOpacity,
     ScrollView,
+    DeviceEventEmitter,
 } from "react-native";
 import { MaterialIcons } from "@expo/vector-icons";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
+import { useEffect, useState } from "react";
+import { aiRiskEngine, RiskAnalysis } from "../utils/AiRiskEngine";
 
 
 export default function Guardian() {
     const router = useRouter();
+    const [analysis, setAnalysis] = useState<RiskAnalysis | null>(null);
+    const [isMonitoring, setIsMonitoring] = useState(false);
+
+    useEffect(() => {
+        // Initial state
+        setAnalysis(aiRiskEngine.performRiskAnalysis());
+        setIsMonitoring(aiRiskEngine.isMonitoringActive());
+
+        // Listen for engine updates
+        // Since subscribe doesn't return unsubscribe, we'll just handle it if possible
+        // or just rely on the event emitter for this specific page
+        aiRiskEngine.subscribe(setAnalysis);
+
+        // Event listener for real-time detections
+        const sub = DeviceEventEmitter.addListener("AI_RISK_DETECTED", (data: RiskAnalysis) => {
+            setAnalysis(data);
+        });
+
+        // Check monitoring state periodically
+        const interval = setInterval(() => {
+            setIsMonitoring(aiRiskEngine.isMonitoringActive());
+        }, 3000);
+
+        return () => {
+            sub.remove();
+            clearInterval(interval);
+        };
+    }, []);
+
+    const riskLevel = analysis?.riskLevel || 'NONE';
+    const confidence = analysis ? Math.round(analysis.confidence * 100) : 0;
+    const triggers = analysis?.triggers || [];
+
     return (
         <View style={styles.container}>
             <ScrollView contentContainerStyle={{ paddingBottom: 120 }}>
@@ -29,21 +65,25 @@ export default function Guardian() {
                     <Text style={styles.headerTitle}>AI Guardian</Text>
 
                     <View style={styles.robotIcon}>
-                        <MaterialIcons name="security" size={20} color="#EC1313" />
+                        <MaterialIcons 
+                            name="security" 
+                            size={20} 
+                            color={isMonitoring ? "#22c55e" : "#EC1313"} 
+                        />
                     </View>
                 </View>
 
                 {/* Hero Section */}
                 <View style={styles.hero}>
-                    <View style={styles.orbGlow} />
-                    <View style={styles.orbOuter}>
+                    <View style={[styles.orbGlow, { backgroundColor: riskLevel === 'HIGH' ? 'rgba(236,19,19,0.3)' : 'rgba(34,197,94,0.1)' }]} />
+                    <View style={[styles.orbOuter, { borderColor: riskLevel === 'HIGH' ? 'rgba(236,19,19,0.4)' : 'rgba(34,197,94,0.2)' }]}>
                         <View style={styles.orbInner}>
                             <LinearGradient
-                                colors={["#EC1313", "#ff6a00"]}
+                                colors={riskLevel === 'HIGH' ? ["#EC1313", "#ff6a00"] : ["#22c55e", "#10b981"]}
                                 style={styles.orbCore}
                             />
                             <MaterialCommunityIcons
-                                name="shield"
+                                name={riskLevel === 'HIGH' ? "shield-alert" : "shield-check"}
                                 size={40}
                                 color="#fff"
                                 style={{ position: "absolute" }}
@@ -51,57 +91,84 @@ export default function Guardian() {
                         </View>
                     </View>
 
-                    <Text style={styles.monitorTitle}>AI Monitoring Active</Text>
+                    <Text style={styles.monitorTitle}>
+                        {isMonitoring ? "AI Monitoring Active" : "AI Monitoring Paused"}
+                    </Text>
                     <Text style={styles.monitorSubtitle}>
-                        Analyzing environment for anomalies
+                        {isMonitoring ? "Analyzing environment for anomalies" : "Sensors are currently offline"}
                     </Text>
                 </View>
 
                 {/* Indicators */}
                 <View style={styles.card}>
-                    <Indicator label="Microphone" status="Listening" />
-                    <Indicator label="Location" status="Tracking" />
-                    <Indicator label="Motion Sensors" status="Active" />
-                    <Indicator label="Volume Pattern" status="Armed" danger />
+                    <Indicator label="Microphone" status={isMonitoring ? "Active" : "Off"} active={isMonitoring} />
+                    <Indicator label="Live Location" status="Broadcasting" active />
+                    <Indicator label="Motion Sensors" status={isMonitoring ? "Streaming" : "Standby"} active={isMonitoring} />
+                    <Indicator label="Pattern Recognition" status={isMonitoring ? "Learning" : "Paused"} active={isMonitoring} />
                 </View>
 
                 {/* Threat Section */}
                 <View style={styles.threatCard}>
                     <Text style={styles.threatTitle}>
-                        Threat Assessment Engine
+                        Real-time Threat Assessment
                     </Text>
 
                     <View style={styles.threatRow}>
-                        <Text style={styles.threatPercent}>12%</Text>
-                        <Text style={styles.lowRisk}>Low Risk</Text>
+                        <Text style={styles.threatPercent}>{confidence}%</Text>
+                        <Text style={[
+                            styles.riskLabel, 
+                            { color: riskLevel === 'HIGH' ? "#EC1313" : riskLevel === 'LOW' ? "#eab308" : "#22c55e" }
+                        ]}>
+                            {riskLevel === 'HIGH' ? "High Risk" : riskLevel === 'LOW' ? "Low Risk" : "Stable"}
+                        </Text>
                     </View>
 
                     <View style={styles.progressBar}>
-                        <View style={styles.progressFill} />
+                        <View style={[styles.progressFill, { width: `${Math.max(5, confidence)}%`, backgroundColor: riskLevel === 'HIGH' ? "#EC1313" : "#22c55e" }]} />
                     </View>
                 </View>
 
                 {/* Observations */}
                 <View style={{ marginTop: 20 }}>
                     <Text style={styles.sectionLabel}>
-                        Recent AI Observations
+                        Live Surveillance Feed
                     </Text>
 
-                    <Observation
-                        text="No unusual motion patterns detected in the last 30 mins."
-                        time="2 MINUTES AGO"
-                    />
-                    <Observation
-                        text="Background noise levels are within normal safety range."
-                        time="5 MINUTES AGO"
-                    />
+                    {triggers.length > 0 ? (
+                        triggers.map((t, i) => (
+                            <Observation
+                                key={i}
+                                text={t}
+                                time="JUST NOW"
+                                type="alert"
+                            />
+                        ))
+                    ) : (
+                        <>
+                            <Observation
+                                text="Environment stability verified. No motion anomalies."
+                                time="SMART SCAN ACTIVE"
+                            />
+                            <Observation
+                                text="Background audio levels within safety parameters."
+                                time="SECURE"
+                            />
+                        </>
+                    )}
                 </View>
 
                 {/* Emergency Button */}
-                <TouchableOpacity style={styles.emergencyButton}>
+                <TouchableOpacity 
+                    style={[styles.emergencyButton, { opacity: isMonitoring ? 1 : 0.5 }]}
+                    onPress={() => {
+                        if (isMonitoring) {
+                            DeviceEventEmitter.emit("FORCE_AI_EMERGENCY");
+                        }
+                    }}
+                >
                     <MaterialIcons name="warning" size={22} color="#fff" />
                     <Text style={styles.emergencyText}>
-                        Force AI Emergency Mode
+                        Force AI Emergency Protocol
                     </Text>
                 </TouchableOpacity>
             </ScrollView>
@@ -111,7 +178,7 @@ export default function Guardian() {
 
 /* ---------------- COMPONENTS ---------------- */
 
-function Indicator({ label, status, danger }: any) {
+function Indicator({ label, status, active, danger }: any) {
     return (
         <View style={styles.indicatorRow}>
             <Text style={styles.indicatorLabel}>{label}</Text>
@@ -120,7 +187,7 @@ function Indicator({ label, status, danger }: any) {
                 <View
                     style={[
                         styles.dot,
-                        { backgroundColor: danger ? "#EC1313" : "#22c55e" },
+                        { backgroundColor: active ? (danger ? "#EC1313" : "#22c55e") : "#555" },
                     ]}
                 />
             </View>
@@ -128,10 +195,14 @@ function Indicator({ label, status, danger }: any) {
     );
 }
 
-function Observation({ text, time }: any) {
+function Observation({ text, time, type }: any) {
     return (
-        <View style={styles.observationCard}>
-            <MaterialIcons name="check-circle" size={20} color="#EC1313" />
+        <View style={[styles.observationCard, type === 'alert' && { borderColor: 'rgba(236,19,19,0.3)', borderWidth: 1 }]}>
+            <MaterialIcons 
+                name={type === 'alert' ? "error-outline" : "check-circle"} 
+                size={20} 
+                color={type === 'alert' ? "#EC1313" : "#22c55e"} 
+            />
             <View style={{ flex: 1, marginLeft: 10 }}>
                 <Text style={styles.observationText}>{text}</Text>
                 <Text style={styles.observationTime}>{time}</Text>
@@ -274,9 +345,9 @@ const styles = StyleSheet.create({
         fontWeight: "bold",
     },
 
-    lowRisk: {
-        color: "#22c55e",
+    riskLabel: {
         fontWeight: "bold",
+        fontSize: 14,
     },
 
     progressBar: {

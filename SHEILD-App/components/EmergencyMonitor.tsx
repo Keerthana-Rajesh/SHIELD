@@ -1,7 +1,8 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import {
     View, Alert, DeviceEventEmitter, Platform, PermissionsAndroid,
-    Modal, Text, TouchableOpacity, StyleSheet, AppState, AppStateStatus
+    Modal, Text, TouchableOpacity, StyleSheet, AppState, AppStateStatus,
+    NativeModules, NativeEventEmitter, BackHandler
 } from 'react-native';
 import { VolumeManager } from 'react-native-volume-manager';
 import Voice from '@react-native-voice/voice';
@@ -10,16 +11,28 @@ import * as Location from 'expo-location';
 import { Audio } from 'expo-av';
 import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
 import * as FileSystem from 'expo-file-system';
-// Firebase Storage removed — using Cloudinary via backend /upload-recording
 import haversine from 'haversine';
 import BASE_URL from '../config/api';
 import * as IntentLauncher from 'expo-intent-launcher';
 import { MaterialIcons } from '@expo/vector-icons';
-const Device = { osBuildId: "mock-device-id" }; // Mock because native module is missing
-// import * as Device from 'expo-device'; 
+import ReactNativeForegroundService from '@supersami/rn-foreground-service';
 import { LinearGradient } from 'expo-linear-gradient';
 import { foregroundCallService } from '../services/ForegroundCallService';
+import { aiRiskEngine, RiskAnalysis, SensorData } from '../utils/AiRiskEngine';
+import { ActivityService } from '../services/ActivityService';
 
+// AI Risk Detection Thresholds
+const LOW_RISK_THRESHOLD = 3;
+const HIGH_RISK_THRESHOLD = 7;
+
+// AI Risk Scoring Constants
+const SCORE_STRONG_SHAKE = 3;
+const SCORE_REPEATED_SHAKING = 4;
+const SCORE_FALL_DETECTION = 5;
+const SCORE_DARKNESS_DETECTED = 2;
+const SCORE_HIGH_SOUND_INTENSITY = 3;
+
+const Device = { osBuildId: "mock-device-id" };
 
 export default function EmergencyMonitor() {
     const [isListening, setIsListening] = useState(false);
@@ -36,6 +49,23 @@ export default function EmergencyMonitor() {
     const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const lastShakeTime = useRef<number>(0);
 
+    // AI Risk Detection State
+    const [aiRiskLevel, setAiRiskLevel] = useState<'LOW' | 'HIGH' | 'NONE'>('NONE');
+    const [aiRiskTriggers, setAiRiskTriggers] = useState<string[]>([]);
+    const [aiConfidence, setAiConfidence] = useState<number>(0);
+    const [showAiRiskAlert, setShowAiRiskAlert] = useState(false);
+    const [isEmergencyActive, setIsEmergencyActive] = useState(false);
+    
+    // AI Sensor Data Storage
+    const sensorHistory = useRef<SensorData[]>([]);
+    const lastRiskAnalysis = useRef<RiskAnalysis | null>(null);
+    const aiAnalysisIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const accelerometerData = useRef<{ x: number; y: number; z: number } | null>(null);
+    const gyroscopeData = useRef<{ x: number; y: number; z: number } | null>(null);
+    const fallDetectionRef = useRef<{ detected: boolean; timestamp: number }>({ detected: false, timestamp: 0 });
+    const movementPatternRef = useRef<{ variance: number; pattern: string }>({ variance: 0, pattern: 'normal' });
+    const darkEnvironmentRef = useRef<{ detected: boolean; duration: number }>({ detected: false, duration: 0 });
+
     // LOW RISK modal state
     const [showLowWarning, setShowLowWarning] = useState(false);
     const [lowCountdown, setLowCountdown] = useState(5);
@@ -49,6 +79,11 @@ export default function EmergencyMonitor() {
     const highCancelTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const highTimerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const isCancelledRef = useRef(false);
+
+    const [isBackgroundMode, setIsBackgroundMode] = useState(false);
+    const backgroundServiceRef = useRef<boolean>(false);
+    const appStateRef = useRef<AppStateStatus>('active');
+    const lastVolumePressRef = useRef<number[]>([]);
 
 
     // Camera recording
@@ -74,9 +109,47 @@ export default function EmergencyMonitor() {
     useEffect(() => {
         setup();
         const cancelSub = DeviceEventEmitter.addListener("EMERGENCY_LISTENING_CANCEL", () => stopListening());
+        const toggleSub = DeviceEventEmitter.addListener("STATUS_TOGGLE_CHANGED", () => setup()); // Re-run setup to refresh enabled states
+        
+        // Listen for AI risk events from background task
+        const aiRiskSub = DeviceEventEmitter.addListener("AI_RISK_DETECTED", (analysis) => {
+            if (isEmergencyActive) return;
+            console.log('📡 Received Background AI Risk:', analysis.riskLevel);
+            if (analysis.riskLevel === 'HIGH') {
+                triggerHighRiskAiAlert(analysis);
+            }
+        });
+
+        const forceAiSub = DeviceEventEmitter.addListener("FORCE_AI_EMERGENCY", () => {
+            console.log('🚨 Manually Forced AI Emergency');
+            triggerHighRiskAiAlert({
+                riskLevel: 'HIGH',
+                confidence: 1.0,
+                triggers: ['User Forced Emergency'],
+                sensorData: {
+                    accelerometer: null,
+                    gyroscope: null,
+                    light: 0,
+                    timestamp: Date.now()
+                }
+            });
+        });
+
+        // App State Listener for Background/Foreground transitions
+        const appStateSubscription = AppState.addEventListener('change', handleAppStateChange);
+
+        // Background Volume Button Listener (works even when app is backgrounded)
+        const volumeListener = VolumeManager.addVolumeListener((event) => {
+            handleVolumeButtonPress(event);
+        });
 
         return () => {
             cancelSub.remove();
+            toggleSub.remove();
+            aiRiskSub.remove();
+            forceAiSub.remove();
+            appStateSubscription.remove();
+            volumeListener.remove();
             Voice.destroy()
                 .then(() => {
                     try { Voice.removeAllListeners(); } catch (e) { }
@@ -90,6 +163,24 @@ export default function EmergencyMonitor() {
         setUserId(id);
         if (id) await fetchKeywords(id);
 
+        // Check for pending emergency from background monitoring
+        try {
+            const pendingEmergency = await AsyncStorage.getItem('pendingEmergency');
+            if (pendingEmergency) {
+                console.log('🚨 Initial setup: Found pending emergency:', pendingEmergency);
+                const analysis = JSON.parse(pendingEmergency);
+                await AsyncStorage.removeItem('pendingEmergency');
+                
+                if (analysis.riskLevel === 'HIGH') {
+                    triggerHighRiskAiAlert(analysis);
+                } else if (analysis.riskLevel === 'LOW') {
+                    triggerLowRiskAiAlert(analysis);
+                }
+            }
+        } catch (e) {
+            console.log('Error checking pending emergency in setup:', e);
+        }
+
         // Voice listeners
         Voice.onSpeechResults = onSpeechResults;
         Voice.onSpeechPartialResults = onSpeechResults;
@@ -101,64 +192,84 @@ export default function EmergencyMonitor() {
                 setIsListening(false);
             });
         };
-        Voice.onSpeechEnd = () => {
-            DeviceEventEmitter.emit("EMERGENCY_LISTENING_CANCEL");
-            Voice.destroy().then(() => {
-                listeningRef.current = false;
-                setIsListening(false);
-            });
-        };
+        
+        // Initiation
+        // Refresh toggles
+        const micEnabled = await AsyncStorage.getItem("MIC_ENABLED");
+        const snsEnabled = await AsyncStorage.getItem("SENSORS_ENABLED");
 
-        // Volume button trigger
-        const volumeListener = VolumeManager.addVolumeListener(() => {
-            const now = Date.now();
-            volumeHistory.current.push(now);
-            volumeHistory.current = volumeHistory.current.filter(t => now - t < 3000);
-            if (volumeHistory.current.length >= 3 && !listeningRef.current) {
-                volumeHistory.current = [];
-                activateEmergencyListening();
-            }
-        });
+        if (snsEnabled === "false") {
+            aiRiskEngine.stopMonitoring();
+        } else {
+            startAiRiskDetection();
+        }
 
-        // Shake detection (safe — fails silently in Expo Go)
-        let shakeListener: { remove: () => void } | null = null;
-        try {
-            const { Accelerometer } = require('expo-sensors');
-            Accelerometer.setUpdateInterval(400);
-            shakeListener = Accelerometer.addListener(({ x, y, z }: { x: number; y: number; z: number }) => {
-                const force = Math.sqrt(x * x + y * y + z * z);
-                if (force > 2.5 && !listeningRef.current) {
-                    const now = Date.now();
-                    if (now - lastShakeTime.current > 5000) {
-                        lastShakeTime.current = now;
-                        console.log('SHAKE DETECTED! Force:', force);
-                        activateEmergencyListening();
+        checkBatteryOptimization();
+    };
+
+    const checkBatteryOptimization = async () => {
+        if (Platform.OS === 'android') {
+            console.log("🔋 Checking battery optimization settings...");
+            // Informative intent for background persistence
+            try {
+                // Intent logic here if needed
+            } catch (e) {}
+        }
+    };
+
+    // ==================== BACKGROUND MONITORING ====================
+
+    const handleAppStateChange = useCallback(async (nextAppState: AppStateStatus) => {
+        console.log('📱 App State Change:', appStateRef.current, '->', nextAppState);
+        
+        if (appStateRef.current.match(/inactive|background/) && nextAppState === 'active') {
+            // App has come to foreground
+            console.log('✅ App came to foreground');
+            setIsBackgroundMode(false);
+            backgroundServiceRef.current = false;
+            
+            // Check for pending emergency from background
+            try {
+                const pendingEmergency = await AsyncStorage.getItem('pendingEmergency');
+                if (pendingEmergency) {
+                    console.log('🚨 Found pending emergency from background:', pendingEmergency);
+                    const analysis = JSON.parse(pendingEmergency);
+                    await AsyncStorage.removeItem('pendingEmergency');
+                    
+                    if (analysis.riskLevel === 'HIGH') {
+                        triggerHighRiskAiAlert(analysis);
+                    } else if (analysis.riskLevel === 'LOW') {
+                        triggerLowRiskAiAlert(analysis);
                     }
                 }
-            });
-        } catch (e) {
-            console.log('Shake detection unavailable:', e);
+            } catch (e) {
+                console.log('Error checking pending emergency:', e);
+            }
+        } else if (nextAppState === 'background' || nextAppState === 'inactive') {
+            // App has gone to background
+            console.log('🔴 App went to background - using background monitoring service');
+            setIsBackgroundMode(true);
+            backgroundServiceRef.current = true;
+            updateForegroundServiceNotification();
         }
+        
+        appStateRef.current = nextAppState;
+    }, []);
 
-        // Blank screen detection via LightSensor (simulated for testing)
-        let lightListener: { remove: () => void } | null = null;
+    const updateForegroundServiceNotification = () => {
         try {
-            const { LightSensor } = require('expo-sensors');
-            lightListener = LightSensor.addListener((data: { illuminance: number }) => {
-                luxRef.current = data.illuminance;
-                // Remove frequent logging - only log on significant changes for debugging
+            ReactNativeForegroundService.update({
+                id: 114,
+                title: "SHIELD Guardian Active",
+                message: isBackgroundMode 
+                    ? "🔴 Background monitoring - Passive sensors active"
+                    : "Monitoring for emergencies.",
+                icon: "ic_launcher",
+                color: "#ec1313",
             });
-            console.log('✅ Light sensor initialized');
         } catch (e) {
-            console.log('⚠️ Light sensor unavailable, using camera feed detection instead:', e);
-            // No need for light sensor simulation - we detect black screen from camera feed
+            console.log('Foreground service update error:', e);
         }
-
-        return () => {
-            volumeListener.remove();
-            if (shakeListener) shakeListener.remove();
-            if (lightListener) lightListener.remove();
-        };
     };
 
 
@@ -198,6 +309,12 @@ export default function EmergencyMonitor() {
                 }
             }
 
+            const micEnabled = await AsyncStorage.getItem("MIC_ENABLED");
+            if (micEnabled === "false") {
+                console.log("🚫 Mic is disabled by user. Skipping Voice start.");
+                return;
+            }
+
             listeningRef.current = true;
             setIsListening(true);
             DeviceEventEmitter.emit("EMERGENCY_LISTENING_START");
@@ -230,6 +347,12 @@ export default function EmergencyMonitor() {
         );
 
         if (highMatch) {
+            ActivityService.logActivity({
+                type: 'KEYWORD',
+                level: 'HIGH',
+                title: 'High Risk Keyword',
+                details: `Detected: "${triggeredKeywordRef.current}"`
+            });
             handleHighRisk();
             stopListening();
             return;
@@ -244,6 +367,12 @@ export default function EmergencyMonitor() {
         );
 
         if (lowMatch) {
+            ActivityService.logActivity({
+                type: 'KEYWORD',
+                level: 'LOW',
+                title: 'Low Risk Keyword',
+                details: `Detected: "${triggeredKeywordRef.current}"`
+            });
             handleLowRisk();
             stopListening();
             return;
@@ -300,7 +429,8 @@ export default function EmergencyMonitor() {
         console.log("Executing LOW RISK action...");
         try {
             const email = await AsyncStorage.getItem("userEmail");
-            const locStr = await getLocationString();
+            const locEnabled = await AsyncStorage.getItem("LOCATION_ENABLED");
+            const locStr = locEnabled !== "false" ? await getLocationString() : "Location Disabled";
             
             let lat = null, lon = null;
             if (locStr.includes('?q=')) {
@@ -351,8 +481,8 @@ export default function EmergencyMonitor() {
             });
         }, 1000);
 
-        // After 10 seconds, if NOT cancelled → start recording (which will also trigger calls)
-        highCancelTimeoutRef.current = setTimeout(() => {
+        // After 10 seconds, if NOT cancelled → start recording and alerts
+        highCancelTimeoutRef.current = setTimeout(async () => {
             clearInterval(highTimerIntervalRef.current!);
             setShowHighWarning(false);
 
@@ -361,8 +491,9 @@ export default function EmergencyMonitor() {
                 return;
             }
 
-            console.log("High risk protocol confirmed after 10s. Starting recording.");
+            console.log("High risk protocol confirmed after 10s. Starting recording and alerts.");
             startHighRiskRecording();
+            await executeHighRiskAlertsAndCalls();
         }, 10000);
     };
 
@@ -372,12 +503,14 @@ export default function EmergencyMonitor() {
         try {
             const email = await AsyncStorage.getItem("userEmail");
             const userId = (await AsyncStorage.getItem("userId")) || "U101";
-            const locStr = await getLocationString();
+            
+            const locEnabled = await AsyncStorage.getItem("LOCATION_ENABLED");
+            const locStr = locEnabled !== "false" ? await getLocationString() : "Location Disabled";
             
             console.log('🚨 EXECUTING HIGH RISK ALERTS');
             console.log('👤 User ID from AsyncStorage:', userId);
-            console.log('� User ID type:', typeof userId);
-            console.log('� Email:', email);
+            console.log(' User ID type:', typeof userId);
+            console.log(' Email:', email);
             console.log('📍 Location:', locStr);
             
             // Let's try a simple test first
@@ -517,20 +650,23 @@ export default function EmergencyMonitor() {
     };
 
     const handleIAmSafe = async () => {
-        console.log("🛡️ User marked as SAFE - stopping all emergency processes");
+        console.log("🛡️ User marked as SAFE - stopping ALL emergency processes");
         
-        // Set cancellation flag
+        // Set cancellation flag immediately
         isCancelledRef.current = true;
         
         // Stop all recordings
+        console.log("📹 Stopping video recording...");
         stopVideoRecording();
+        console.log("🎤 Stopping audio recording...");
         stopAudioRecording();
         setIsRecording(false);
         
         // Stop the call rotation
+        console.log("📞 Stopping emergency call rotation...");
         foregroundCallService.stopCallRotation();
         
-        // Clear call countdown states
+        // Clear all call countdown states
         setShowCallCountdown(false);
         setShowActiveCallCountdown(false);
         setShowContactCalling(false);
@@ -541,15 +677,60 @@ export default function EmergencyMonitor() {
             callCountdownRef.current = null;
         }
         
-        // Hide camera and modals
+        // Stop AI Risk Detection
+        console.log("🤖 Stopping AI Risk Detection...");
+        stopAiRiskDetection();
+        
+        // Stop background audio monitoring (via engine)
+        console.log("🎙️ Reverting AI engine to passive mode...");
+        await aiRiskEngine.stopFullAnalysis();
+        
+        // Stop voice detection
+        console.log("🎤 Stopping voice detection...");
+        try {
+            await Voice.destroy();
+            Voice.removeAllListeners();
+            listeningRef.current = false;
+            setIsListening(false);
+        } catch (e) {
+            console.log('Voice already stopped or error:', e);
+        }
+        
+        // Hide camera and all modals
+        console.log("📱 Hiding all UI elements...");
         setShowCamera(false);
         setShowHighWarning(false);
+        setShowLowWarning(false);
         
-        // Clear all timeouts
+        // Clear all timeouts and intervals
+        console.log("⏰ Clearing all timers and intervals...");
         if (highCancelTimeoutRef.current) clearTimeout(highCancelTimeoutRef.current);
         if (highTimerIntervalRef.current) clearInterval(highTimerIntervalRef.current);
+        if (listeningTimeoutRef.current) clearTimeout(listeningTimeoutRef.current);
+        if (cancelTimeoutRef.current) clearTimeout(cancelTimeoutRef.current);
+        if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
         
-        console.log("✅ Emergency workflow terminated successfully");
+        // Reset all emergency states
+        console.log("🔄 Resetting emergency states...");
+        setHighCountdown(10);
+        setLowCountdown(5);
+        setUploadStatus('');
+        blankScreenCounterRef.current = 0;
+        luxRef.current = 100;
+        triggeredKeywordRef.current = '';
+        
+        // Emit emergency stop event
+        DeviceEventEmitter.emit("EMERGENCY_LISTENING_STOP");
+        
+        setIsEmergencyActive(false);
+        setAiRiskLevel('NONE');
+        
+        console.log("✅ ALL emergency processes terminated successfully");
+        
+        // After 3s, allow new detections
+        setTimeout(() => {
+            isCancelledRef.current = false;
+        }, 3000);
     };
 
     const cancelHighRiskAlert = async () => {
@@ -564,15 +745,190 @@ export default function EmergencyMonitor() {
         stopVideoRecording();
         stopAudioRecording();
         setIsRecording(false);
-        
-        // Send emergency email notification to all emergency contacts
-        // Send user's live GPS location
-        // Start the automatic emergency calling rotation
-        await executeHighRiskAlertsAndCalls();
+        setIsEmergencyActive(false);
+        setAiRiskLevel('NONE');
+
+        // After 3s, allow new detections
+        setTimeout(() => {
+            isCancelledRef.current = false;
+        }, 3000);
     };
 
+    // ==================== AI RISK DETECTION FUNCTIONS ====================
+    
+    /**
+     * Calculate movement magnitude using accelerometer values:
+     * movementMagnitude = sqrt(x² + y² + z²)
+     */
+    const handleVolumeButtonPress = useCallback((event: any) => {
+        const now = Date.now();
+        lastVolumePressRef.current.push(now);
+        
+        // Keep only last 3 seconds of presses
+        lastVolumePressRef.current = lastVolumePressRef.current.filter(t => now - t < 3000);
+        
+        console.log('🔊 Volume button pressed:', lastVolumePressRef.current.length, 'times in 3s');
+        
+        // Triple volume press triggers emergency
+        if (lastVolumePressRef.current.length >= 3 && !listeningRef.current) {
+            lastVolumePressRef.current = [];
+            console.log('🔥🔥🔥 VOLUME BUTTON TRIGGER - EMERGENCY ACTIVATED');
+            activateEmergencyListening();
+        }
+    }, []);
+    
+    const performRiskAnalysis = (): RiskAnalysis => {
+        return aiRiskEngine.performRiskAnalysis();
+    };
+    
+    const startAiRiskDetection = () => {
+        console.log('🤖 Initializing AI Risk Engine (Passive Mode)...');
+        aiRiskEngine.startMonitoring();
 
+        // One-time subscription
+        aiRiskEngine.subscribe((analysis) => {
+            setAiRiskLevel(analysis.riskLevel);
+            setAiConfidence(analysis.confidence);
+            setAiRiskTriggers(analysis.triggers);
 
+            // Handle UI triggers from the subscription (triggered by background task or active detection)
+            if (!isEmergencyActive && !showHighWarning && !showLowWarning && !isCancelledRef.current) {
+                if (analysis.riskLevel === 'HIGH') {
+                    triggerHighRiskAiAlert(analysis);
+                } else if (analysis.riskLevel === 'LOW') {
+                    triggerLowRiskAiAlert(analysis);
+                }
+            }
+        });
+    };
+    
+    const stopAiRiskDetection = () => {
+        console.log('🤖 Stopping AI Risk Detection...');
+        if (aiAnalysisIntervalRef.current) {
+            clearInterval(aiAnalysisIntervalRef.current);
+            aiAnalysisIntervalRef.current = null;
+        }
+        setAiRiskLevel('NONE');
+        setAiConfidence(0);
+        setAiRiskTriggers([]);
+    };
+    
+    const triggerHighRiskAiAlert = (analysis: RiskAnalysis) => {
+        if (isEmergencyActive || showHighWarning || isCancelledRef.current) return;
+        
+        console.log('🚨 AI HIGH RISK ALERT');
+        ActivityService.logActivity({
+            type: 'AI_RISK',
+            level: 'HIGH',
+            title: 'Critical AI Detection',
+            details: analysis.triggers.join(', ')
+        });
+        setIsEmergencyActive(true);
+        setShowAiRiskAlert(true);
+        setShowHighWarning(true);
+        setHighCountdown(10);
+        setAiRiskLevel('HIGH');
+        setAiConfidence(analysis.confidence);
+        setAiRiskTriggers(analysis.triggers);
+        
+        // Start countdown
+        let countdown = 10;
+        highTimerIntervalRef.current = setInterval(() => {
+            countdown--;
+            setHighCountdown(countdown);
+            
+            if (countdown <= 0) {
+                if (highTimerIntervalRef.current) clearInterval(highTimerIntervalRef.current);
+                setShowAiRiskAlert(false);
+                setShowHighWarning(false);
+                
+                if (!isCancelledRef.current) {
+                    console.log('🚨 AI HIGH RISK CONFIRMED - Starting emergency workflow!');
+                    triggeredKeywordRef.current = `AI Detection: ${analysis.triggers.join(', ')}`;
+                    startEmergencyWorkflow();
+                }
+            }
+        }, 1000);
+        
+        // Auto-cancel after 10 seconds if not disabled
+        highCancelTimeoutRef.current = setTimeout(() => {
+            if (highTimerIntervalRef.current) clearInterval(highTimerIntervalRef.current);
+            setShowAiRiskAlert(false);
+            setShowHighWarning(false);
+        }, 10000);
+    };
+    
+    const triggerLowRiskAiAlert = (analysis: RiskAnalysis | { riskLevel: 'LOW'; confidence: number; triggers: string[]; sensorData: SensorData }) => {
+        if (isEmergencyActive || showLowWarning || isCancelledRef.current) return;
+        
+        console.log('⚠️ AI LOW RISK ALERT');
+        ActivityService.logActivity({
+            type: 'AI_RISK',
+            level: 'LOW',
+            title: 'AI Threat Detected',
+            details: analysis.triggers.join(', ')
+        });
+        setShowLowWarning(true);
+        setLowCountdown(5);
+        setAiRiskLevel('LOW');
+        setAiConfidence(analysis.confidence);
+        setAiRiskTriggers(analysis.triggers);
+        
+        // Start countdown
+        let countdown = 5;
+        timerIntervalRef.current = setInterval(() => {
+            countdown--;
+            setLowCountdown(countdown);
+            
+            if (countdown <= 0) {
+                if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+                setShowLowWarning(false);
+                
+                if (!isCancelledRef.current) {
+                    console.log('⚠️ AI LOW RISK CONFIRMED - Starting voice monitoring');
+                    activateEmergencyListening();
+                }
+            }
+        }, 1000);
+        
+        // Auto-cancel after 5 seconds if not disabled
+        cancelTimeoutRef.current = setTimeout(() => {
+            if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+            setShowLowWarning(false);
+        }, 5000);
+    };
+    
+    const disableAiRiskAlert = () => {
+        console.log('🛡️ AI Risk Alert disabled by user (Treating as false alarm)');
+        
+        // Clear all timers
+        if (highTimerIntervalRef.current) clearInterval(highTimerIntervalRef.current);
+        if (highCancelTimeoutRef.current) clearTimeout(highCancelTimeoutRef.current);
+        if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+        if (cancelTimeoutRef.current) clearTimeout(cancelTimeoutRef.current);
+        
+        // Hide alerts
+        setShowAiRiskAlert(false);
+        setShowHighWarning(false);
+        setShowLowWarning(false);
+        
+        // Reset AI state & Stop Active sensors
+        setAiRiskLevel('NONE');
+        setAiConfidence(0);
+        setAiRiskTriggers([]);
+        setIsEmergencyActive(false);
+        aiRiskEngine.stopFullAnalysis(); // Revert to passive mode
+    };
+    
+    const startEmergencyWorkflow = async () => {
+        console.log('🚨 Starting Emergency Workflow...');
+        
+        // Start high risk recording
+        await startHighRiskRecording();
+        
+        // Execute high risk alerts and calls
+        await executeHighRiskAlertsAndCalls();
+    };
     const startHighRiskRecording = async () => {
         console.log("📹 Starting high risk video + audio recording...");
 
@@ -944,6 +1300,29 @@ export default function EmergencyMonitor() {
 
     return (
         <>
+            {/* ───── BACKGROUND MODE STATUS INDICATOR ───── */}
+            {isBackgroundMode && (
+                <View style={styles.backgroundStatusIndicator}>
+                    <View style={styles.backgroundStatusDot} />
+                    <Text style={styles.backgroundStatusText}>🔴 Background Monitoring Active</Text>
+                    <Text style={styles.backgroundStatusSubtext}>Sensors & Audio Active</Text>
+                </View>
+            )}
+
+            {/* ───── AI RISK STATUS INDICATOR ───── */}
+            {aiRiskLevel !== 'NONE' && (
+                <View style={[styles.aiRiskIndicator, aiRiskLevel === 'HIGH' ? styles.aiRiskHigh : styles.aiRiskLow]}>
+                    <MaterialIcons 
+                        name={aiRiskLevel === 'HIGH' ? "warning" : "info"} 
+                        size={14} 
+                        color={aiRiskLevel === 'HIGH' ? "#ef4444" : "#fbbf24"} 
+                    />
+                    <Text style={styles.aiRiskText}>
+                        AI: {aiRiskLevel} Risk ({(aiConfidence * 100).toFixed(0)}%)
+                    </Text>
+                </View>
+            )}
+
             {/* ───── LOW RISK WARNING MODAL ───── */}
             <Modal visible={showLowWarning} transparent animationType="fade">
                 <View style={styles.modalOverlay}>
@@ -1187,6 +1566,64 @@ export default function EmergencyMonitor() {
 }
 
 const styles = StyleSheet.create({
+    // Background Mode Indicator
+    backgroundStatusIndicator: {
+        position: 'absolute',
+        top: 50,
+        left: 20,
+        right: 20,
+        backgroundColor: 'rgba(239, 68, 68, 0.95)',
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        borderRadius: 12,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        zIndex: 9999,
+        elevation: 100,
+    },
+    backgroundStatusDot: {
+        width: 10,
+        height: 10,
+        borderRadius: 5,
+        backgroundColor: '#fff',
+    },
+    backgroundStatusText: {
+        color: '#fff',
+        fontSize: 14,
+        fontWeight: 'bold',
+        flex: 1,
+    },
+    backgroundStatusSubtext: {
+        color: 'rgba(255,255,255,0.7)',
+        fontSize: 11,
+    },
+    // AI Risk Indicator
+    aiRiskIndicator: {
+        position: 'absolute',
+        top: 120,
+        left: 20,
+        right: 20,
+        paddingVertical: 8,
+        paddingHorizontal: 12,
+        borderRadius: 8,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        zIndex: 9998,
+        elevation: 99,
+    },
+    aiRiskHigh: {
+        backgroundColor: 'rgba(239, 68, 68, 0.9)',
+    },
+    aiRiskLow: {
+        backgroundColor: 'rgba(251, 191, 36, 0.9)',
+    },
+    aiRiskText: {
+        color: '#fff',
+        fontSize: 12,
+        fontWeight: 'bold',
+    },
     modalOverlay: {
         flex: 1,
         backgroundColor: "rgba(0,0,0,0.85)",

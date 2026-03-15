@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import {
     View,
     Text,
@@ -22,6 +22,7 @@ export default function CloudStorage() {
     const [refreshing, setRefreshing] = useState(false);
     const [filter, setFilter] = useState<'video' | 'audio'>('audio');
     const [playingUrl, setPlayingUrl] = useState<string | null>(null);
+    const videoRef = useRef<any>(null);
     const router = useRouter();
 
     const fetchRecordings = async () => {
@@ -54,7 +55,7 @@ export default function CloudStorage() {
     const handleDelete = async (id: number) => {
         Alert.alert(
             "Delete Recording",
-            "Are you sure you want to delete this evidence?",
+            "Are you sure you want to delete this evidence permanently?",
             [
                 { text: "Cancel", style: "cancel" },
                 {
@@ -62,14 +63,62 @@ export default function CloudStorage() {
                     style: "destructive",
                     onPress: async () => {
                         try {
+                            // Find the recording to get its Cloudinary public_id
+                            const recording = recordings.find(r => r.id === id);
+                            
+                            // First delete from database
                             const res = await fetch(`${BASE_URL}/delete-recording/${id}`, {
                                 method: 'DELETE'
                             });
-                            if (res.ok) {
-                                setRecordings(prev => prev.filter(r => r.id !== id));
+                            
+                            if (!res.ok) {
+                                throw new Error('Failed to delete from database');
                             }
+                            
+                            // If recording has a Cloudinary URL, also delete from Cloudinary
+                            if (recording && recording.url && recording.url.includes('cloudinary')) {
+                                console.log('🗑️ Also deleting from Cloudinary...');
+                                
+                                try {
+                                    // Extract public_id from Cloudinary URL
+                                    const urlParts = recording.url.split('/');
+                                    const fileNameWithExt = urlParts[urlParts.length - 1];
+                                    const publicId = fileNameWithExt.split('.')[0]; // Remove file extension
+                                    
+                                    console.log(`🗑️ Deleting Cloudinary file with public_id: ${publicId}`);
+                                    
+                                    // Call backend to delete from Cloudinary
+                                    const cloudinaryRes = await fetch(`${BASE_URL}/delete-cloudinary/${publicId}`, {
+                                        method: 'DELETE'
+                                    });
+                                    
+                                    if (cloudinaryRes.ok) {
+                                        console.log('✅ Successfully deleted from Cloudinary');
+                                    } else {
+                                        console.warn('⚠️ Failed to delete from Cloudinary, but database record was removed');
+                                    }
+                                } catch (cloudinaryErr) {
+                                    console.warn('⚠️ Cloudinary deletion error:', cloudinaryErr);
+                                    // Don't fail the whole operation if Cloudinary deletion fails
+                                }
+                            }
+                            
+                            // Remove from local state
+                            setRecordings(prev => prev.filter(r => r.id !== id));
+                            
+                            Alert.alert(
+                                "Success",
+                                "Recording deleted successfully",
+                                [{ text: "OK" }]
+                            );
+                            
                         } catch (err) {
                             console.error("Delete error:", err);
+                            Alert.alert(
+                                "Error",
+                                "Failed to delete recording. Please try again.",
+                                [{ text: "OK" }]
+                            );
                         }
                     }
                 }
@@ -156,33 +205,67 @@ export default function CloudStorage() {
                 )}
             </ScrollView>
 
-            {/* VIDEO PLAYER MODAL */}
+            {/* VIDEO/AUDIO PLAYER MODAL */}
             <Modal visible={!!playingUrl} transparent animationType="slide" onRequestClose={() => setPlayingUrl(null)}>
                 <View style={styles.playerWrapper}>
                     <View style={styles.playerContainer}>
                         <View style={styles.playerHeader}>
-                            <Text style={styles.playerTitle}>Emergency Evidence</Text>
+                            <Text style={styles.playerTitle}>
+                                {playingUrl && playingUrl.includes('video') ? 'Video Evidence' : 'Audio Evidence'}
+                            </Text>
                             <TouchableOpacity onPress={() => setPlayingUrl(null)}>
                                 <MaterialIcons name="close" size={28} color="#fff" />
                             </TouchableOpacity>
                         </View>
 
                         {playingUrl && (
-                            <Video
-                                source={{ uri: playingUrl }}
-                                rate={1.0}
-                                volume={1.0}
-                                isMuted={false}
-                                resizeMode={ResizeMode.CONTAIN}
-                                shouldPlay
-                                useNativeControls
-                                style={styles.videoPlayer}
-                            />
+                            <View style={styles.mediaContainer}>
+                                {playingUrl.includes('video') ? (
+                                    <Video
+                                        ref={videoRef}
+                                        source={{ uri: playingUrl }}
+                                        rate={1.0}
+                                        volume={1.0}
+                                        isMuted={false}
+                                        resizeMode={ResizeMode.CONTAIN}
+                                        shouldPlay
+                                        useNativeControls
+                                        style={styles.videoPlayer}
+                                        onError={(error) => {
+                                            console.error('Video playback error:', error);
+                                            Alert.alert('Error', 'Unable to play this video. It may be corrupted or in an unsupported format.');
+                                        }}
+                                        onLoad={() => {
+                                            console.log('Video loaded successfully');
+                                        }}
+                                        onPlaybackStatusUpdate={(status) => {
+                                            if (status.isLoaded) {
+                                                console.log('Video playback status:', status);
+                                            }
+                                        }}
+                                    />
+                                ) : (
+                                    <View style={styles.audioPlayerContainer}>
+                                        <MaterialIcons name="audiotrack" size={64} color="#ec1313" style={styles.audioIcon} />
+                                        <Text style={styles.audioText}>Audio Evidence Playing</Text>
+                                        <Text style={styles.audioSubText}>Audio controls are not available in this view</Text>
+                                        <TouchableOpacity 
+                                            style={styles.openInBrowserBtn}
+                                            onPress={() => {
+                                                if (playingUrl) WebBrowser.openBrowserAsync(playingUrl);
+                                            }}
+                                        >
+                                            <Text style={styles.openInBrowserBtnText}>Play Audio in Browser</Text>
+                                        </TouchableOpacity>
+                                    </View>
+                                )}
+                            </View>
                         )}
 
                         <TouchableOpacity style={styles.browserBtn} onPress={() => {
                             if (playingUrl) WebBrowser.openBrowserAsync(playingUrl);
                         }}>
+                            <MaterialIcons name="open-in-browser" size={16} color="#fff" style={{ marginRight: 8 }} />
                             <Text style={styles.browserBtnText}>Open in Browser</Text>
                         </TouchableOpacity>
                     </View>
@@ -458,6 +541,43 @@ const styles = StyleSheet.create({
         alignItems: 'center',
     },
     browserBtnText: {
+        color: '#fff',
+        fontWeight: 'bold',
+    },
+    mediaContainer: {
+        flex: 1,
+        width: '100%',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    audioPlayerContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 40,
+    },
+    audioIcon: {
+        marginBottom: 20,
+    },
+    audioText: {
+        color: '#fff',
+        fontSize: 18,
+        fontWeight: 'bold',
+        marginBottom: 10,
+    },
+    audioSubText: {
+        color: '#aaa',
+        fontSize: 14,
+        textAlign: 'center',
+        marginBottom: 30,
+    },
+    openInBrowserBtn: {
+        backgroundColor: '#ec1313',
+        paddingHorizontal: 20,
+        paddingVertical: 12,
+        borderRadius: 25,
+    },
+    openInBrowserBtnText: {
         color: '#fff',
         fontWeight: 'bold',
     },
