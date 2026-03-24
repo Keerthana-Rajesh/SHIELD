@@ -26,15 +26,15 @@ export default function Contacts() {
         try {
           setLoading(true);
 
-          const email = await AsyncStorage.getItem("userEmail");
+          const userId = await AsyncStorage.getItem("userId");
 
-          if (!email) {
+          if (!userId) {
             if (isActive) setContacts([]);
             return;
           }
 
           const response = await fetch(
-            `${BASE_URL}/contacts/${email}`
+            `${BASE_URL}/getTrustedContacts/${userId}`
           );
 
           if (!response.ok) {
@@ -45,7 +45,6 @@ export default function Contacts() {
 
           const data = await response.json();
           console.log("Contacts API response:", data);
-          console.log("Loaded contacts:", data);
 
           if (!isActive) return;
 
@@ -103,7 +102,9 @@ export default function Contacts() {
 
         {/* HEADER */}
         <View style={styles.header}>
-          <MaterialIcons name="arrow-back-ios" size={22} color="#fff" />
+          <TouchableOpacity onPress={() => router.back()}>
+            <MaterialIcons name="arrow-back-ios" size={22} color="#fff" />
+          </TouchableOpacity>
           <Text style={styles.headerTitle}>Trusted Contacts</Text>
           <MaterialIcons name="settings" size={24} color="#fff" />
         </View>
@@ -133,23 +134,15 @@ export default function Contacts() {
             </Text>
           </View>
         ) : (
-          contacts.map((item) => (
+          contacts.map((item, index) => (
             <ContactCard
-              key={item.id}
+              key={item.id || item.trusted_id || index}
               contact={item}
               onDelete={handleDelete}
             />
           ))
         )}
       </ScrollView>
-
-      {/* FAB */}
-      <TouchableOpacity
-        style={styles.fab}
-        onPress={() => router.push("/addcontact")}
-      >
-        <MaterialIcons name="add" size={28} color="#fff" />
-      </TouchableOpacity>
 
       {/* NAVIGATION */}
       <View style={styles.navBar}>
@@ -184,13 +177,21 @@ const ContactCard = ({ contact, onDelete }: any) => {
       </View>
 
       <View style={{ flex: 1 }}>
-        <Text style={styles.cardName}>{contact.name}</Text>
+        <Text style={styles.cardName}>{contact.trusted_name || contact.name}</Text>
         <Text style={styles.cardSub}>
-          {contact.relation} • {contact.phone}
+          {contact.relationship_type || contact.relation} • {contact.trusted_no || contact.phone}
         </Text>
-        <Text style={{ color: "#888", fontSize: 11 }}>
-          {contact.contact_email}
+        <Text style={{ color: "#888", fontSize: 11, marginBottom: 4 }}>
+          {contact.email || contact.contact_email}
         </Text>
+        {contact.latitude && contact.longitude && (
+          <View style={{ flexDirection: "row", alignItems: "center" }}>
+            <MaterialIcons name="location-on" size={12} color="#ec1313" />
+            <Text style={{ color: "#aaa", fontSize: 10, marginLeft: 4 }}>
+              Lat: {parseFloat(contact.latitude).toFixed(4)}, Lon: {parseFloat(contact.longitude).toFixed(4)}
+            </Text>
+          </View>
+        )}
       </View>
 
       <View style={styles.cardActions}>
@@ -200,32 +201,6 @@ const ContactCard = ({ contact, onDelete }: any) => {
 
         <TouchableOpacity style={styles.iconButton}>
           <MaterialIcons name="chat-bubble" size={18} color="#ec1313" />
-        </TouchableOpacity>
-        <TouchableOpacity
-          onPress={() =>
-            Alert.alert(
-              "Delete Contact",
-              "Are you sure you want to delete this contact?",
-              [
-                { text: "Cancel", style: "cancel" },
-                { text: "Delete", onPress: () => onDelete(contact.id) }
-              ]
-            )
-          }
-        >
-          <MaterialIcons name="delete" size={20} color="#ff4444" />
-        </TouchableOpacity>
-
-        {/* THREE DOT EDIT */}
-        <TouchableOpacity
-          onPress={() =>
-            router.push({
-              pathname: "/addcontact",
-              params: { contact: JSON.stringify(contact) },
-            })
-          }
-        >
-          <MaterialIcons name="edit" size={20} color="#ec1313" />
         </TouchableOpacity>
       </View>
     </View>

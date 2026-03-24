@@ -1,33 +1,33 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { DeviceEventEmitter } from "react-native";
+import BASE_URL from "../config/api";
 
 export interface Activity {
     id: string;
-    type: 'AI_RISK' | 'KEYWORD' | 'SOS';
-    level: 'LOW' | 'HIGH' | 'INFO';
-    title: string;
-    details: string;
-    timestamp: number;
+    emergency_id?: number | null;
+    activity_type: string;
+    timestamp: string;
 }
 
-const STORAGE_KEY = "SHIELD_ACTIVITIES";
-
 export const ActivityService = {
-    async logActivity(activity: Omit<Activity, 'id' | 'timestamp'>) {
+    async logActivity(activityType: string, emergencyId: number | null = null) {
         try {
-            const raw = await AsyncStorage.getItem(STORAGE_KEY);
-            let activities: Activity[] = raw ? JSON.parse(raw) : [];
-            
-            const newActivity: Activity = {
-                ...activity,
-                id: Math.random().toString(36).substr(2, 9),
-                timestamp: Date.now()
-            };
-            
-            activities = [newActivity, ...activities].slice(0, 50); // Keep last 50
-            await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(activities));
+            const response = await fetch(`${BASE_URL}/activity/log`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    emergency_id: emergencyId,
+                    activity_type: activityType,
+                }),
+            });
+
+            if (!response.ok) {
+                console.error("Log activity failed with status:", response.status);
+                return;
+            }
+
             DeviceEventEmitter.emit("ACTIVITY_UPDATED");
-            return newActivity;
+            return await response.json();
         } catch (e) {
             console.error("Error logging activity:", e);
         }
@@ -35,14 +35,24 @@ export const ActivityService = {
 
     async getActivities(): Promise<Activity[]> {
         try {
-            const raw = await AsyncStorage.getItem(STORAGE_KEY);
-            return raw ? JSON.parse(raw) : [];
+            const email = await AsyncStorage.getItem("userEmail");
+            if (!email) return [];
+
+            // Updated this to match new backend structure if a generic fetch exists, 
+            // otherwise using a placeholder for now since we focused on logs storage.
+            // For now, let's assume we want to see recent logs.
+            const response = await fetch(`${BASE_URL}/activities/${email}`);
+
+            if (!response.ok) {
+                console.error("Fetch activities failed with status:", response.status);
+                return [];
+            }
+
+            const data = await response.json();
+            return Array.isArray(data) ? data : [];
         } catch (e) {
+            console.error("Error fetching activities:", e);
             return [];
         }
-    },
-
-    async clearActivities() {
-        await AsyncStorage.removeItem(STORAGE_KEY);
     }
 };

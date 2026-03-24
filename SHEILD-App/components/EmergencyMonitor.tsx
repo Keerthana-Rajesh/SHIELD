@@ -20,6 +20,10 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { foregroundCallService } from '../services/ForegroundCallService';
 import { aiRiskEngine, RiskAnalysis, SensorData } from '../utils/AiRiskEngine';
 import { ActivityService } from '../services/ActivityService';
+import { EmergencyService } from '../services/EmergencyService';
+import { GuardianServiceManager } from '../services/GuardianServiceManager';
+import * as SMS from 'expo-sms';
+import { registerGuardianTask } from '../utils/GuardianTask';
 
 // AI Risk Detection Thresholds
 const LOW_RISK_THRESHOLD = 3;
@@ -37,6 +41,7 @@ const Device = { osBuildId: "mock-device-id" };
 export default function EmergencyMonitor() {
     const [isListening, setIsListening] = useState(false);
     const [userId, setUserId] = useState<string | null>(null);
+    const [currentEmergencyId, setCurrentEmergencyId] = useState<number | null>(null);
     const [lowRiskKeywords, setLowRiskKeywords] = useState<string[]>([]);
     const [highRiskKeywords, setHighRiskKeywords] = useState<string[]>([]);
 
@@ -96,6 +101,10 @@ export default function EmergencyMonitor() {
     const [currentCallContact, setCurrentCallContact] = useState('');
     const [showActiveCallCountdown, setShowActiveCallCountdown] = useState(false);
     const [activeCallCountdown, setActiveCallCountdown] = useState(15);
+
+    // PERSISTENT GUARDIAN STATE
+    const [isGuardianEnabled, setIsGuardianEnabled] = useState(false);
+    const [guardianStatus, setGuardianStatus] = useState<'PASSIVE' | 'ACTIVE' | 'EMERGENCY'>('PASSIVE');
     const cameraRef = useRef<CameraView | null>(null);
     const videoRecordingRef = useRef<boolean>(false);
     const audioRecordingRef = useRef<Audio.Recording | null>(null);
@@ -106,10 +115,64 @@ export default function EmergencyMonitor() {
     const callCountdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
 
+    const startGuardianService = async () => {
+        await GuardianServiceManager.start();
+        await AsyncStorage.setItem('GUARDIAN_ENABLED', 'true');
+        aiRiskEngine.startMonitoring();
+        setIsGuardianEnabled(true);
+    };
+
+    const stopGuardianService = async () => {
+        await GuardianServiceManager.stop();
+        await AsyncStorage.setItem('GUARDIAN_ENABLED', 'false');
+        aiRiskEngine.stopMonitoring();
+        setIsGuardianEnabled(false);
+    };
+
     useEffect(() => {
+        const loadGuardianState = async () => {
+            const enabled = await AsyncStorage.getItem('GUARDIAN_ENABLED');
+            if (enabled === 'true') {
+                setIsGuardianEnabled(true);
+                startGuardianService();
+            }
+        };
+        loadGuardianState();
+
+        // 1. Register Background Task
+        registerGuardianTask();
+
+        // 2. Listen for Auto Triggers from Background
+        const autoSub = DeviceEventEmitter.addListener('AUTO_EMERGENCY_TRIGGER', (analysis: RiskAnalysis) => {
+            console.log('⚡ Background Guardian triggered Emergency!');
+            triggeredKeywordRef.current = analysis.triggers.join(', ');
+            handleHighRisk();
+        });
+
+        const riskSub = DeviceEventEmitter.addListener('AI_RISK_DETECTED', (analysis: RiskAnalysis) => {
+            setAiRiskLevel(analysis.riskLevel);
+            setAiConfidence(analysis.confidence);
+            setAiRiskTriggers(analysis.triggers);
+            
+            if (analysis.riskLevel === 'HIGH') setGuardianStatus('ACTIVE');
+            else if (isEmergencyActive) setGuardianStatus('EMERGENCY');
+            else setGuardianStatus('PASSIVE');
+        });
+
+        // 3. Status Toggle Change (from Dashboard)
+        const toggleSub = DeviceEventEmitter.addListener('STATUS_TOGGLE_CHANGED', async () => {
+             const sensorStatus = await AsyncStorage.getItem('SENSORS_ENABLED');
+             if (sensorStatus === 'true') {
+                 setIsGuardianEnabled(true);
+                 startGuardianService();
+             } else {
+                 setIsGuardianEnabled(false);
+                 stopGuardianService();
+             }
+        });
+
         setup();
         const cancelSub = DeviceEventEmitter.addListener("EMERGENCY_LISTENING_CANCEL", () => stopListening());
-        const toggleSub = DeviceEventEmitter.addListener("STATUS_TOGGLE_CHANGED", () => setup()); // Re-run setup to refresh enabled states
         
         // Listen for AI risk events from background task
         const aiRiskSub = DeviceEventEmitter.addListener("AI_RISK_DETECTED", (analysis) => {
@@ -347,12 +410,7 @@ export default function EmergencyMonitor() {
         );
 
         if (highMatch) {
-            ActivityService.logActivity({
-                type: 'KEYWORD',
-                level: 'HIGH',
-                title: 'High Risk Keyword',
-                details: `Detected: "${triggeredKeywordRef.current}"`
-            });
+            ActivityService.logActivity(`KEYWORD_DETECTED_HIGH: ${triggeredKeywordRef.current}`, currentEmergencyId);
             handleHighRisk();
             stopListening();
             return;
@@ -367,12 +425,7 @@ export default function EmergencyMonitor() {
         );
 
         if (lowMatch) {
-            ActivityService.logActivity({
-                type: 'KEYWORD',
-                level: 'LOW',
-                title: 'Low Risk Keyword',
-                details: `Detected: "${triggeredKeywordRef.current}"`
-            });
+            ActivityService.logActivity(`KEYWORD_DETECTED_LOW: ${triggeredKeywordRef.current}`, currentEmergencyId);
             handleLowRisk();
             stopListening();
             return;
@@ -439,7 +492,15 @@ export default function EmergencyMonitor() {
                 lon = coords[1];
             }
 
-            if (email) {
+            if (email && userId) {
+                // start emergency record in DB
+                const startRes = await EmergencyService.startEmergency(userId, triggeredKeywordRef.current, locStr);
+                if (startRes.success) {
+                    setCurrentEmergencyId(startRes.emergency_id);
+                    await EmergencyService.logAlert(startRes.emergency_id, 'email');
+                    await ActivityService.logActivity("SOS_TRIGGERED", startRes.emergency_id);
+                }
+
                 const sosRes = await fetch(`${BASE_URL}/send-sos`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
@@ -534,6 +595,16 @@ export default function EmergencyMonitor() {
 
             // 1. Send High-Risk Email immediately
             if (email) {
+                // start emergency record in DB if not already started
+                if (!currentEmergencyId && userId) {
+                    const startRes = await EmergencyService.startEmergency(userId, triggeredKeywordRef.current, locStr);
+                    if (startRes.success) {
+                        setCurrentEmergencyId(startRes.emergency_id);
+                        await EmergencyService.logAlert(startRes.emergency_id, 'email');
+                        await ActivityService.logActivity("SOS_TRIGGERED", startRes.emergency_id);
+                    }
+                }
+
                 await fetch(`${BASE_URL}/send-sos`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
@@ -582,16 +653,28 @@ export default function EmergencyMonitor() {
                 console.log('📞 Found contacts:', contacts.length, 'Starting call rotation...');
                 console.log('📞 Contact details:', contacts.map(c => ({ name: c.trusted_name, phone: c.trusted_no, userId: c.user_id, hasLocation: !!(c.latitude && c.longitude) })));
                 
+                // 3. Send SMS to all trusted numbers
+                const numbers = contacts.map((c: any) => c.trusted_no);
+                const smsAvailable = await SMS.isAvailableAsync();
+                if (smsAvailable) {
+                    await SMS.sendSMSAsync(numbers, `🚨 SHEILD EMERGENCY! I need help. My location: ${locStr}`);
+                }
+
                 // Update contacts with location data and start calling rotation
                 const updatedContacts = await foregroundCallService.updateContactsWithLocation(userId, contacts);
                 console.log('🔄 Updated contacts for location:', updatedContacts.length);
-                
+
                 // Start call rotation without await to prevent blocking
                 console.log('🚀 Starting emergency call rotation...');
                 foregroundCallService.startEmergencyCallRotation(
                     updatedContacts,
-                    (contactName, timeRemaining) => {
+                    (contactName: string, timeRemaining: number) => {
                         console.log(`📞 Calling ${contactName} - ${timeRemaining}s remaining`);
+                        // High risk call logging
+                        if (currentEmergencyId) {
+                            EmergencyService.logCall(currentEmergencyId, 'DIALLED');
+                        }
+                        
                         // Show Contact Calling modal with countdown
                         setShowContactCalling(true);
                         setCallingContactName(contactName);
@@ -725,12 +808,24 @@ export default function EmergencyMonitor() {
         setIsEmergencyActive(false);
         setAiRiskLevel('NONE');
         
+        // RESET Emergency ID and Sync SAFE state to DB
+        if (currentEmergencyId) {
+            await EmergencyService.endEmergency(currentEmergencyId);
+            await ActivityService.logActivity("USER_SAFE_CONFIRMED", currentEmergencyId);
+            setCurrentEmergencyId(null);
+        }
+        
         console.log("✅ ALL emergency processes terminated successfully");
         
-        // After 3s, allow new detections
-        setTimeout(() => {
+        // After 5s, re-enable AI monitoring in passive mode
+        setTimeout(async () => {
             isCancelledRef.current = false;
-        }, 3000);
+            const snsEnabled = await AsyncStorage.getItem("SENSORS_ENABLED");
+            if (snsEnabled !== "false") {
+                console.log("🤖 Auto-restarting AI Risk Engine after safe confirmation...");
+                startAiRiskDetection();
+            }
+        }, 5000);
     };
 
     const cancelHighRiskAlert = async () => {
@@ -748,10 +843,15 @@ export default function EmergencyMonitor() {
         setIsEmergencyActive(false);
         setAiRiskLevel('NONE');
 
-        // After 3s, allow new detections
-        setTimeout(() => {
+        // After 5s, re-enable AI monitoring in passive mode
+        setTimeout(async () => {
             isCancelledRef.current = false;
-        }, 3000);
+            const snsEnabled = await AsyncStorage.getItem("SENSORS_ENABLED");
+            if (snsEnabled !== "false") {
+                console.log("🤖 Auto-restarting AI Risk Engine after cancellation...");
+                startAiRiskDetection();
+            }
+        }, 5000);
     };
 
     // ==================== AI RISK DETECTION FUNCTIONS ====================
@@ -817,12 +917,7 @@ export default function EmergencyMonitor() {
         if (isEmergencyActive || showHighWarning || isCancelledRef.current) return;
         
         console.log('🚨 AI HIGH RISK ALERT');
-        ActivityService.logActivity({
-            type: 'AI_RISK',
-            level: 'HIGH',
-            title: 'Critical AI Detection',
-            details: analysis.triggers.join(', ')
-        });
+        ActivityService.logActivity(`AI_RISK_DETECTED_HIGH: ${analysis.triggers.join(', ')}`, currentEmergencyId);
         setIsEmergencyActive(true);
         setShowAiRiskAlert(true);
         setShowHighWarning(true);
@@ -862,12 +957,7 @@ export default function EmergencyMonitor() {
         if (isEmergencyActive || showLowWarning || isCancelledRef.current) return;
         
         console.log('⚠️ AI LOW RISK ALERT');
-        ActivityService.logActivity({
-            type: 'AI_RISK',
-            level: 'LOW',
-            title: 'AI Threat Detected',
-            details: analysis.triggers.join(', ')
-        });
+        ActivityService.logActivity(`AI_RISK_DETECTED_LOW: ${analysis.triggers.join(', ')}`, currentEmergencyId);
         setShowLowWarning(true);
         setLowCountdown(5);
         setAiRiskLevel('LOW');
@@ -920,13 +1010,43 @@ export default function EmergencyMonitor() {
         aiRiskEngine.stopFullAnalysis(); // Revert to passive mode
     };
     
+    /**
+     * Camera Handling with Darkness Logic
+     * Automatically switch to front camera if back is obstructed/dark
+     */
+    useEffect(() => {
+        if (isEmergencyActive) {
+            const sub = DeviceEventEmitter.addListener('AI_RISK_DETECTED', (analysis: RiskAnalysis) => {
+                if (analysis.sensorData.light < 5.0 && cameraFacing === 'back') {
+                    console.log('🌘 Darkness detected during emergency, switching to FRONT camera');
+                    setCameraFacing('front');
+                } else if (analysis.sensorData.light > 20.0 && cameraFacing === 'front') {
+                   // Optional: switch back if it gets bright, but usually front is more personal evidence
+                   // setCameraFacing('back');
+                }
+            });
+            return () => sub.remove();
+        }
+    }, [isEmergencyActive, cameraFacing]);
+
     const startEmergencyWorkflow = async () => {
         console.log('🚨 Starting Emergency Workflow...');
         
+        const storedUserId = await AsyncStorage.getItem("userId");
+        if (storedUserId) {
+            const locStr = await getLocationString();
+            const startRes = await EmergencyService.startEmergency(storedUserId, triggeredKeywordRef.current, locStr);
+            if (startRes.success) {
+                setCurrentEmergencyId(startRes.emergency_id);
+                await EmergencyService.logAlert(startRes.emergency_id, 'email');
+                await ActivityService.logActivity("SOS_TRIGGERED_AI", startRes.emergency_id);
+            }
+        }
+
         // Start high risk recording
         await startHighRiskRecording();
         
-        // Execute high risk alerts and calls
+        // Execute high risk alerts and calls (this now skips startRes if currentEmergencyId is already set)
         await executeHighRiskAlertsAndCalls();
     };
     const startHighRiskRecording = async () => {
@@ -1272,6 +1392,16 @@ export default function EmergencyMonitor() {
                         device_id: deviceId,
                     }),
                 });
+
+                // Link evidence to the emergency incident
+                if (currentEmergencyId) {
+                    if (type === 'video') {
+                        await EmergencyService.logVideo(currentEmergencyId, cameraFacing === 'front' ? 'front' : 'rear', cloudData.secure_url);
+                    } else {
+                        await EmergencyService.logAudio(currentEmergencyId, cloudData.secure_url);
+                    }
+                    await ActivityService.logActivity(`RECORDING_UPLOADED_${type.toUpperCase()}`, currentEmergencyId);
+                }
 
             } else {
                 console.error("❌ Cloudinary error:", cloudData);

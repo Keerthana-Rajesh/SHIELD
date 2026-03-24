@@ -16,6 +16,7 @@ import { useRouter } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
 import * as ImagePicker from "expo-image-picker";
 import BASE_URL from "../config/api";
+import { ProfileService } from "../services/EmergencyService";
 
 export default function Profile() {
   const router = useRouter();
@@ -78,6 +79,10 @@ export default function Profile() {
       );
 
       if (response.ok) {
+        const storedId = await AsyncStorage.getItem("userId");
+        if (storedId) {
+          await ProfileService.saveProfile(storedId, notes);
+        }
         Alert.alert("Success", "Profile updated successfully!");
       } else {
         Alert.alert("Error", "Update failed");

@@ -1,0 +1,185 @@
+SHEILD DB REPORT
+================
+
+Table: access_link
+----------------
+- link_id (int) [PK] [AI]
+- evidence_id (int)
+- access_level (varchar(20))
+- expiry_time (datetime)
+
+Table: activity_log
+----------------
+- log_id (int) [PK] [AI]
+- emergency_id (int)
+- activity_type (varchar(50))
+- timestamp (datetime)
+
+Table: audio_record
+----------------
+- audio_seq (int) [PK] [AI]
+- emergency_id (int)
+- audio_file_path (varchar(255))
+- encryption_status (tinyint(1))
+
+Table: auth_users
+----------------
+- id (int) [PK] [AI]
+- name (varchar(100))
+- email (varchar(100))
+- password (varchar(255))
+- created_at (timestamp)
+
+Table: cloud_evidence
+----------------
+- evidence_id (int) [PK] [AI]
+- emergency_id (int)
+- evidence_type (varchar(10))
+- upload_time (datetime)
+- retention_status (varchar(20))
+
+Table: contacts
+----------------
+- id (int) [PK] [AI]
+- user_id (int)
+- name (varchar(255))
+- relation (varchar(255))
+- phone (varchar(20))
+- location (varchar(255))
+- notes (text)
+- gender (enum('male','female'))
+- created_at (timestamp)
+- contact_email (varchar(255))
+
+Table: email_otps
+----------------
+- id (int) [PK] [AI]
+- email (varchar(100))
+- otp (varchar(6))
+- created_at (timestamp)
+
+Table: emergency_alert
+----------------
+- alert_id (int) [PK] [AI]
+- emergency_id (int)
+- alert_type (varchar(30))
+- alert_time (datetime)
+- delivery_status (varchar(20))
+
+Table: emergency_call
+----------------
+- call_id (int) [PK] [AI]
+- emergency_id (int)
+- call_time (datetime)
+- call_status (varchar(20))
+
+Table: emergency_incidents
+----------------
+- id (int) [PK] [AI]
+- user_id (int)
+- detected_keyword (varchar(255))
+- location_url (text)
+- recording_url (text)
+- contacts_notified (json)
+- status (varchar(50))
+- cloudinary_public_id (varchar(255))
+- created_at (timestamp)
+
+Table: emergency_keyword
+----------------
+- keyword_id (int) [PK] [AI]
+- user_id (int)
+- keyword_text (varchar(30))
+- security_level (enum('HIGH','LOW'))
+
+Table: emergency_recordings
+----------------
+- id (int) [PK] [AI]
+- user_id (int)
+- type (enum('video','audio'))
+- url (text)
+- filename (varchar(255))
+- recorded_at (datetime)
+
+Table: fake_call
+----------------
+- fake_call_id (int) [PK] [AI]
+- user_id (int)
+- caller_name (varchar(50))
+- trigger_method (varchar(20))
+
+Table: hardware_trigger
+----------------
+- trigger_id (int) [PK] [AI]
+- user_id (int)
+- button_pattern (varchar(20))
+- trigger_status (tinyint(1))
+
+Table: notification
+----------------
+- notification_id (int) [PK] [AI]
+- emergency_id (int)
+- notification_type (varchar(30))
+- sent_time (datetime)
+
+Table: otp_codes
+----------------
+- id (int) [PK] [AI]
+- phone (varchar(15))
+- otp (varchar(6))
+- created_at (timestamp)
+
+Table: qr_tokens
+----------------
+- id (int) [PK] [AI]
+- user_id (int)
+- token (varchar(255))
+- created_at (datetime)
+
+Table: security_activities
+----------------
+- id (int) [PK] [AI]
+- user_id (int)
+- type (varchar(20))
+- level (varchar(10))
+- title (varchar(255))
+- details (text)
+- created_at (timestamp)
+
+Table: trusted_contact
+----------------
+- trusted_id (int) [PK] [AI]
+- user_id (varchar(20))
+- trusted_name (varchar(50))
+- trusted_no (varchar(15))
+- email (varchar(255))
+- relationship_type (varchar(30))
+- latitude (varchar(50))
+- longitude (varchar(50))
+
+Table: user_profile
+----------------
+- profile_id (int) [PK] [AI]
+- user_id (int)
+- emergency_info (varchar(255))
+- profile_created_date (date)
+
+Table: users
+----------------
+- id (int) [PK] [AI]
+- name (varchar(100))
+- age (int)
+- blood_group (varchar(10))
+- notes (text)
+- password (varchar(100))
+- ai_enabled (tinyint(1))
+- email (varchar(100))
+- qr_token (varchar(255))
+
+Table: video_record
+----------------
+- video_seq (int) [PK] [AI]
+- emergency_id (int)
+- camera_type (varchar(10))
+- video_file_path (varchar(255))
+- encryption_status (tinyint(1))

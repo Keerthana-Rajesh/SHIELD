@@ -141,9 +141,9 @@ export default function CloudStorage() {
             {/* HEADER */}
             <View style={styles.header}>
                 <View style={styles.headerLeft}>
-                    <View style={styles.headerIcon}>
-                        <MaterialIcons name="cloud" size={28} color="#ec1313" />
-                    </View>
+                    <TouchableOpacity style={styles.headerIcon} onPress={() => router.back()}>
+                        <MaterialIcons name="arrow-back-ios" size={26} color="#ec1313" />
+                    </TouchableOpacity>
                     <View>
                         <Text style={styles.headerTitle}>Cloud Storage</Text>
                         <Text style={styles.headerSub}>Emergency recordings saved securely</Text>

@@ -16,6 +16,7 @@ import { Audio } from "expo-av";
 import * as FileSystem from "expo-file-system/legacy";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Slider from "@react-native-community/slider";
+import { FakeCallService } from "../services/EmergencyService";
 
 type RecordingMode = "idle" | "recording" | "paused" | "recorded";
 type Gender = "male" | "female";
@@ -463,6 +464,14 @@ export default function FakeCallSetup() {
       }
       finalUri = selectedVoiceObj.uri;
     }
+
+    // Log fake call to backend
+    (async () => {
+        const id = await AsyncStorage.getItem("userId");
+        if (id) {
+            await FakeCallService.triggerFakeCall(id, selectedCaller);
+        }
+    })();
 
     router.push({
       pathname: "/incoming",

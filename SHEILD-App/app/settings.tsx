@@ -9,8 +9,10 @@ import {
 } from "react-native";
 import Slider from "@react-native-community/slider";
 import { MaterialIcons } from "@expo/vector-icons";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "expo-router";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { ProfileService } from "../services/EmergencyService";
 
 export default function Settings() {
     const [keywordEnabled, setKeywordEnabled] = useState(true);
@@ -28,6 +30,16 @@ export default function Settings() {
         .split(",")
         .map(word => word.trim().toLowerCase());
 
+    const handleVolumeToggle = async (val: boolean) => {
+        setVolumeTrigger(val);
+        const id = await AsyncStorage.getItem("userId");
+        if (id) {
+            await ProfileService.saveHardwareTrigger(id, val);
+        }
+        // Also save to AsyncStorage for legacy local logic
+        await AsyncStorage.setItem("VOLUME_TRIGGER_ENABLED", val.toString());
+    };
+
 
     return (
         <View style={{ flex: 1 }}>
@@ -40,8 +52,10 @@ export default function Settings() {
                 {/* HEADER */}
                 <View style={styles.header}>
                     <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                        <MaterialIcons name="security" size={28} color="#EC1313" />
-                        <Text style={styles.headerTitle}>SHIELD</Text>
+                        <TouchableOpacity onPress={() => router.back()}>
+                            <MaterialIcons name="arrow-back-ios" size={24} color="#EC1313" />
+                        </TouchableOpacity>
+                        <Text style={styles.headerTitle}>Settings</Text>
                     </View>
                     <MaterialIcons name="help-outline" size={22} color="#AAA" />
                 </View>
@@ -85,7 +99,7 @@ export default function Settings() {
                         icon="volume-up"
                         label="Volume Button Trigger"
                         value={volumeTrigger}
-                        onValueChange={setVolumeTrigger}
+                        onValueChange={handleVolumeToggle}
                     />
                     <Row
                         icon="power-settings-new"

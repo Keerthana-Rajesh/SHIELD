@@ -125,26 +125,6 @@ export default function PhoneScreen() {
         )}
       </TouchableOpacity>
 
-      {/* Divider */}
-      <View style={styles.divider}>
-        <View style={styles.line} />
-        <Text style={styles.dividerText}>SECURE ACCESS</Text>
-        <View style={styles.line} />
-      </View>
-
-      {/* Alternate Login */}
-      <View style={styles.altRow}>
-        <TouchableOpacity style={styles.altButton}>
-          <MaterialIcons name="face" size={22} color="#aaa" />
-          <Text style={styles.altText}>FaceID</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.altButton}>
-          <MaterialIcons name="g-translate" size={22} color="#aaa" />
-          <Text style={styles.altText}>Google</Text>
-        </TouchableOpacity>
-      </View>
-
       {/* Footer */}
       <Text style={styles.footerText}>
         By signing in, you agree to our{" "}

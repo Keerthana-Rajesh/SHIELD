@@ -11,13 +11,15 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
-import { aiRiskEngine, RiskAnalysis } from "../utils/AiRiskEngine";
+import { aiRiskEngine, RiskAnalysis, SensorData } from "../utils/AiRiskEngine";
+import { ActivityService } from "../services/ActivityService";
 
 
 export default function Guardian() {
     const router = useRouter();
     const [analysis, setAnalysis] = useState<RiskAnalysis | null>(null);
     const [isMonitoring, setIsMonitoring] = useState(false);
+    const [isFullAnalysis, setIsFullAnalysis] = useState(false);
 
     useEffect(() => {
         // Initial state
@@ -37,7 +39,8 @@ export default function Guardian() {
         // Check monitoring state periodically
         const interval = setInterval(() => {
             setIsMonitoring(aiRiskEngine.isMonitoringActive());
-        }, 3000);
+            setIsFullAnalysis(aiRiskEngine.isAnalysisActive());
+        }, 1000);
 
         return () => {
             sub.remove();
@@ -92,10 +95,14 @@ export default function Guardian() {
                     </View>
 
                     <Text style={styles.monitorTitle}>
-                        {isMonitoring ? "AI Monitoring Active" : "AI Monitoring Paused"}
+                        {isMonitoring 
+                            ? (isFullAnalysis ? "Enhanced Analysis Active" : "Passive Guard Active") 
+                            : "AI Monitoring Paused"}
                     </Text>
                     <Text style={styles.monitorSubtitle}>
-                        {isMonitoring ? "Analyzing environment for anomalies" : "Sensors are currently offline"}
+                        {isMonitoring 
+                            ? (isFullAnalysis ? "Analyzing all sensors & microphones" : "Waiting for suspicious movement") 
+                            : "Sensors are currently offline"}
                     </Text>
                 </View>
 
@@ -171,6 +178,39 @@ export default function Guardian() {
                         Force AI Emergency Protocol
                     </Text>
                 </TouchableOpacity>
+
+                {/* Manual Reactivation Button */}
+                {!isFullAnalysis && isMonitoring && (
+                    <TouchableOpacity 
+                        style={styles.reactivateButton}
+                        onPress={async () => {
+                            console.log('🤖 Manual Full Analysis Activation');
+                            await aiRiskEngine.startFullAnalysis();
+                            setIsFullAnalysis(true);
+                            
+                            ActivityService.logActivity({
+                                type: 'AI_RISK',
+                                level: 'INFO',
+                                title: 'Manual Enhanced Monitoring',
+                                details: 'User explicitly started Full AI analysis mode'
+                            });
+                        }}
+                    >
+                        <MaterialIcons name="radar" size={22} color="#ec1313" />
+                        <Text style={styles.reactivateText}>
+                            Engage Enhanced Monitoring
+                        </Text>
+                    </TouchableOpacity>
+                )}
+
+                {isFullAnalysis && (
+                    <View style={styles.enhancedStatus}>
+                        <MaterialIcons name="graphic-eq" size={24} color="#22c55e" />
+                        <Text style={styles.enhancedStatusText}>
+                            Live Sensor Analysis Active
+                        </Text>
+                    </View>
+                )}
             </ScrollView>
         </View>
     );
@@ -409,4 +449,37 @@ const styles = StyleSheet.create({
         fontWeight: "bold",
         marginLeft: 10,
     },
+    reactivateButton: {
+        backgroundColor: "rgba(236,19,19,0.1)",
+        paddingVertical: 18,
+        borderRadius: 20,
+        flexDirection: "row",
+        justifyContent: "center",
+        alignItems: "center",
+        marginTop: 15,
+        borderWidth: 1,
+        borderColor: "#EC1313",
+        borderStyle: 'dashed'
+    },
+    reactivateText: {
+        color: "#EC1313",
+        fontWeight: "bold",
+        marginLeft: 10,
+    },
+    enhancedStatus: {
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "center",
+        marginTop: 20,
+        backgroundColor: "rgba(34,197,94,0.1)",
+        padding: 10,
+        borderRadius: 12,
+        gap: 8,
+        marginBottom: 20
+    },
+    enhancedStatusText: {
+        color: "#22c55e",
+        fontWeight: '600',
+        fontSize: 14
+    }
 });

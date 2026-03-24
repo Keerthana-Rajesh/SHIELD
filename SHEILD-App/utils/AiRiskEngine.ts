@@ -1,6 +1,7 @@
 import { Accelerometer, Gyroscope, LightSensor } from 'expo-sensors';
 import { Audio } from 'expo-av';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { ActivityService } from '../services/ActivityService';
 
 // AI Risk Detection Thresholds
 const LOW_RISK_THRESHOLD = 3;
@@ -76,6 +77,14 @@ class AiRiskEngine {
                 const magnitude = this.calculateMovementMagnitude(data);
                 if (magnitude > MOVEMENT_THRESHOLD) {
                     console.log(`🤖 AiRiskEngine: Suspicious movement detected (${magnitude.toFixed(2)}). Starting full analysis.`);
+                    
+                    ActivityService.logActivity({
+                        type: 'AI_RISK',
+                        level: 'LOW',
+                        title: 'Suspicious Movement',
+                        details: `Magnitude ${magnitude.toFixed(2)} detected in passive mode. Activating full sensor scan.`
+                    });
+
                     this.startFullAnalysis();
                 }
             }
@@ -100,7 +109,7 @@ class AiRiskEngine {
     /**
      * Activates all sensors and microphone for detailed emergency analysis
      */
-    private async startFullAnalysis() {
+    public async startFullAnalysis() {
         if (this.isAnalysisRunning) return;
         this.isAnalysisRunning = true;
 

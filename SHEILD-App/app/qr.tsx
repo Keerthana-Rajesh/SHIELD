@@ -43,17 +43,24 @@ export default function QRPage() {
             setUserId(storedId);
             setUserEmail(storedEmail);
 
-            // 1. Fetch contacts to validate setup (using same endpoint as Contacts screen)
-            const contactRes = await fetch(`${BASE_URL}/contacts/${storedEmail}`);
-            const data = await contactRes.json();
+            // 1. Fetch contacts from both systems to validate setup
+            const [oldContactRes, trustedContactRes] = await Promise.all([
+                fetch(`${BASE_URL}/contacts/${storedEmail}`),
+                fetch(`${BASE_URL}/getTrustedContacts/${storedId}`)
+            ]);
+            
+            const oldData = await oldContactRes.json();
+            const trustedData = await trustedContactRes.json();
             
             // Handle different API response formats
-            const contactsList = Array.isArray(data) ? data : (Array.isArray(data.contacts) ? data.contacts : []);
-            const count = contactsList.length;
+            const oldContactsList = Array.isArray(oldData) ? oldData : (Array.isArray(oldData.contacts) ? oldData.contacts : []);
+            const trustedContactsList = Array.isArray(trustedData) ? trustedData : [];
+            
+            const count = oldContactsList.length + trustedContactsList.length;
             setContactsCount(count);
 
             // 2. Determine if setup is complete
-            const setupDone = count > 0 && storedEmail !== null;
+            const setupDone = count > 0 && storedId !== null && storedEmail !== null;
             setIsSetupComplete(setupDone);
 
             // 3. If setup is complete, fetch/generate QR using numeric userId

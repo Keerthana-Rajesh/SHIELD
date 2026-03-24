@@ -69,7 +69,9 @@ export default function SafeMap() {
 
         {/* Header */}
         <View style={styles.header}>
-          <MaterialIcons name="explore" size={26} color="#EC1313" />
+          <TouchableOpacity onPress={() => router.back()}>
+            <MaterialIcons name="arrow-back-ios" size={24} color="#EC1313" />
+          </TouchableOpacity>
           <Text style={styles.headerTitle}>Safe Map</Text>
           <TouchableOpacity style={styles.locationBtn} onPress={getLocation}>
             <MaterialIcons name="my-location" size={22} color="#fff" />

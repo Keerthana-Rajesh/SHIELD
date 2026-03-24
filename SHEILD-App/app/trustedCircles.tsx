@@ -28,6 +28,7 @@ export default function TrustedCircles() {
     const [email, setEmail] = useState(""); // 📧 New email state
     const [address, setAddress] = useState(""); 
     const [userId, setUserId] = useState("U101");
+    const [editingId, setEditingId] = useState<number | null>(null);
     
     const [loading, setLoading] = useState(true);
     const [analyzing, setAnalyzing] = useState(false);
@@ -111,6 +112,7 @@ export default function TrustedCircles() {
 
         try {
             const payload = {
+                trusted_id: editingId,
                 user_id: userId,
                 trusted_name: name,
                 trusted_no: phone,
@@ -120,7 +122,9 @@ export default function TrustedCircles() {
                 longitude: selectedLocation.longitude
             };
 
-            const response = await fetch(`${BASE_URL}/addTrustedContact`, {
+            const endpoint = editingId ? "/updateTrustedContact" : "/addTrustedContact";
+            
+            const response = await fetch(`${BASE_URL}${endpoint}`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(payload)
@@ -129,13 +133,14 @@ export default function TrustedCircles() {
             const data = await response.json();
 
             if (data.success) {
-                Alert.alert("Success", "Contact Added to Circle");
+                Alert.alert("Success", editingId ? "Contact Updated!" : "Contact Added to Circle");
                 setName("");
                 setPhone("");
                 setEmail("");
                 setRelationship("");
                 setAddress("");
                 setSelectedLocation(null);
+                setEditingId(null);
                 loadContacts();
             } else {
                 Alert.alert("Database Error", "Failed to save contact");
@@ -143,6 +148,30 @@ export default function TrustedCircles() {
         } catch (error) {
             Alert.alert("Error", "Could not connect to server");
         }
+    };
+
+    const handleEdit = (contact: any) => {
+        setEditingId(contact.trusted_id);
+        setName(contact.trusted_name);
+        setPhone(contact.trusted_no);
+        setEmail(contact.email || "");
+        setRelationship(contact.relationship_type || "");
+        setAddress("");
+        setSelectedLocation({
+            latitude: parseFloat(contact.latitude),
+            longitude: parseFloat(contact.longitude),
+            label: "Saved Location"
+        });
+    };
+    
+    const cancelEdit = () => {
+        setEditingId(null);
+        setName("");
+        setPhone("");
+        setEmail("");
+        setRelationship("");
+        setAddress("");
+        setSelectedLocation(null);
     };
 
     const loadContacts = async (id?: string) => {
@@ -277,10 +306,19 @@ export default function TrustedCircles() {
                         </Text>
                     </View>
 
-                    <TouchableOpacity style={styles.addButton} onPress={addContact}>
-                        <MaterialIcons name="person-add" size={20} color="white" />
-                        <Text style={styles.addButtonText}>ADD TO Circle</Text>
-                    </TouchableOpacity>
+                    <View style={{ flexDirection: 'row', gap: 10 }}>
+                        <TouchableOpacity style={[styles.addButton, { flex: 1 }]} onPress={addContact}>
+                            <MaterialIcons name={editingId ? "save" : "person-add"} size={20} color="white" />
+                            <Text style={styles.addButtonText}>{editingId ? "UPDATE" : "ADD TO Circle"}</Text>
+                        </TouchableOpacity>
+                        
+                        {editingId && (
+                            <TouchableOpacity style={[styles.addButton, { flex: 1, backgroundColor: "#333" }]} onPress={cancelEdit}>
+                                <MaterialIcons name="close" size={20} color="white" />
+                                <Text style={styles.addButtonText}>CANCEL</Text>
+                            </TouchableOpacity>
+                        )}
+                    </View>
                 </View>
 
                 {/* List */}
@@ -327,6 +365,13 @@ export default function TrustedCircles() {
                                     onPress={() => Linking.openURL(`tel:${item.trusted_no}`)}
                                 >
                                     <MaterialIcons name="call" size={20} color="white" />
+                                </TouchableOpacity>
+                                
+                                <TouchableOpacity 
+                                    style={[styles.callActionButton, { backgroundColor: "rgba(255,255,255,0.1)", marginLeft: 5 }]} 
+                                    onPress={() => handleEdit(item)}
+                                >
+                                    <MaterialIcons name="edit" size={18} color="white" />
                                 </TouchableOpacity>
                             </View>
                         ))

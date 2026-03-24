@@ -24,6 +24,8 @@ import { Audio } from 'expo-av';
 import { aiRiskEngine, RiskAnalysis } from "../utils/AiRiskEngine";
 import Voice from "@react-native-voice/voice";
 import { ActivityService, Activity } from "../services/ActivityService";
+import { EmergencyService } from "../services/EmergencyService";
+import { GuardianServiceManager } from "../services/GuardianServiceManager";
 
 export default function Dashboard() {
   const router = useRouter();
@@ -36,6 +38,8 @@ export default function Dashboard() {
   const [sensorStatus, setSensorStatus] = useState("Locked");
   const [airisk, setAiRisk] = useState<RiskAnalysis | null>(null);
   const [recentActivities, setRecentActivities] = useState<Activity[]>([]);
+  const [isGuardianEnabled, setIsGuardianEnabled] = useState(false);
+  const [guardianStatus, setGuardianStatus] = useState<'PASSIVE' | 'ACTIVE' | 'EMERGENCY'>('PASSIVE');
 
   useEffect(() => {
 
@@ -78,11 +82,23 @@ export default function Dashboard() {
 
     const sub4 = DeviceEventEmitter.addListener("ACTIVITY_UPDATED", loadActivities);
 
+    const checkGuardian = async () => {
+      const enabled = await AsyncStorage.getItem('GUARDIAN_ENABLED');
+      setIsGuardianEnabled(enabled === 'true');
+    };
+    checkGuardian();
+
+    const sub5 = DeviceEventEmitter.addListener("AI_RISK_DETECTED", (analysis) => {
+        if (analysis.riskLevel === 'HIGH') setGuardianStatus('ACTIVE');
+        else setGuardianStatus('PASSIVE');
+    });
+
     return () => {
       sub1.remove();
       sub2.remove();
       sub3.remove();
       sub4.remove();
+      sub5.remove();
     };
 
   }, []);
@@ -134,6 +150,34 @@ export default function Dashboard() {
       await aiRiskEngine.stopFullAnalysis(); // Mic is part of full analysis
     }
     DeviceEventEmitter.emit("STATUS_TOGGLE_CHANGED");
+  };
+
+  const toggleGuardian = async () => {
+    const newState = !isGuardianEnabled;
+    setIsGuardianEnabled(newState);
+    
+    if (newState) {
+      console.log('🛡️ Starting AI Guardian Service...');
+      await GuardianServiceManager.start();
+      await AsyncStorage.setItem('GUARDIAN_ENABLED', 'true');
+      aiRiskEngine.startMonitoring();
+      
+      // Request battery optimization ignore
+      if (Platform.OS === 'android') {
+        const packageName = 'com.shield.safetyapp';
+        IntentLauncher.startActivityAsync(
+          'android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS',
+          { data: `package:${packageName}` }
+        );
+      }
+    } else {
+      console.log('🛑 Stopping AI Guardian Service...');
+      await GuardianServiceManager.stop();
+      await AsyncStorage.setItem('GUARDIAN_ENABLED', 'false');
+      aiRiskEngine.stopMonitoring();
+    }
+    
+    DeviceEventEmitter.emit('STATUS_TOGGLE_CHANGED');
   };
 
   const toggleLocation = async () => {
@@ -222,12 +266,7 @@ export default function Dashboard() {
     try {
       const email = await AsyncStorage.getItem("userEmail");
 
-      ActivityService.logActivity({
-        type: 'SOS',
-        level: 'HIGH',
-        title: 'Manual SOS Triggered',
-        details: 'User initiated SOS via long press button'
-      });
+      ActivityService.logActivity('Manual SOS Triggered via Long Press');
 
       // 1️⃣ Get location permission
       const { status } = await Location.requestForegroundPermissionsAsync();
@@ -306,6 +345,13 @@ export default function Dashboard() {
       }
 
       // 4️⃣ Send alert to backend (automatic email notification to trusted contacts)
+      // and start emergency record in database
+      const startRes = await EmergencyService.startEmergency(userId, "MANUAL SOS", mapLink);
+      if (startRes.success) {
+          await EmergencyService.logAlert(startRes.emergency_id, 'email');
+          await ActivityService.logActivity("SOS_TRIGGERED_MANUAL", startRes.emergency_id);
+      }
+
       await fetch(`${BASE_URL}/send-sos`, {
         method: "POST",
         headers: {
@@ -454,6 +500,13 @@ export default function Dashboard() {
           <StatusCard icon="mic" label="Mic" value={micStatus} onPress={toggleMic} />
           <StatusCard icon="location-on" label="Location" value={locationStatus} onPress={toggleLocation} />
           <StatusCard icon="sensors" label="Sensors" value={sensorStatus} onPress={toggleSensors} />
+          <StatusCard 
+            icon="verified-user" 
+            label="Guardian" 
+            value={isGuardianEnabled ? "Active" : "Offline"} 
+            onPress={toggleGuardian} 
+            color={isGuardianEnabled ? "#34d399" : "#666"}
+          />
         </View>
 
         {/* AI Banner */}
@@ -500,8 +553,8 @@ export default function Dashboard() {
             recentActivities.map(act => (
               <ActivityItem
                 key={act.id}
-                icon={act.type === 'AI_RISK' ? "smart-toy" : act.type === 'KEYWORD' ? "mic" : "warning"}
-                text={act.title}
+                icon={act.activity_type.includes('AI') ? "smart-toy" : act.activity_type.includes('KEYWORD') ? "mic" : "warning"}
+                text={act.activity_type}
                 time={new Date(act.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
               />
             ))
