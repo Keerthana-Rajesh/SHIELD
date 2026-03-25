@@ -1,95 +1,54 @@
 const db = require("../config/db");
-const { Resend } = require("resend");
 require("dotenv").config();
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+// 🔹 GOOGLE AUTH
+const googleAuth = async (req, res) => {
+  const { email, name, profile_pic } = req.body;
 
-// 🔹 SEND OTP
-const sendEmailOTP = async (req, res) => {
-  const { email } = req.body;
-
-  if (!email) {
-    return res.status(400).json({ success: false, message: "Email required" });
-  }
-
-  const otp = Math.floor(100000 + Math.random() * 900000);
-
-  try {
-    console.log("📩 Sending OTP to:", email);
-
-    // Save OTP
-    await db.query(
-      "INSERT INTO email_otps (email, otp) VALUES (?, ?)",
-      [email, otp]
-    );
-
-    // Send email via Resend
-    await resend.emails.send({
-      from: "SHEILD <onboarding@resend.dev>",
-      to: email,
-      subject: "Your SHEILD OTP Code",
-      html: `<strong>Your OTP is ${otp}</strong><br/>Valid for 5 minutes.`,
-    });
-
-    console.log("✅ OTP sent successfully");
-
-    res.json({ success: true, message: "OTP sent to email" });
-
-  } catch (error) {
-    console.error("❌ OTP Error:", error);
-    res.status(500).json({ success: false, message: "Server error" });
-  }
-};
-
-// 🔹 VERIFY OTP
-const verifyEmailOTP = async (req, res) => {
-  const { email, otp } = req.body;
-
-  if (!email || !otp) {
-    return res.status(400).json({ success: false, message: "Missing fields" });
+  if (!email || !name) {
+    return res.status(400).json({ success: false, message: "Missing Google data" });
   }
 
   try {
+    // 1. Check if user exists
     const [results] = await db.query(
-      `SELECT * FROM email_otps 
-       WHERE email = ? AND otp = ? 
-       AND created_at >= NOW() - INTERVAL 5 MINUTE 
-       ORDER BY created_at DESC LIMIT 1`,
-      [email, otp]
-    );
-
-    if (results.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid or expired OTP",
-      });
-    }
-
-    const [userResult] = await db.query(
       "SELECT * FROM users WHERE email = ?",
       [email]
     );
 
-    if (userResult.length > 0) {
-      return res.json({
-        success: true,
-        existingUser: true,
-        user: userResult[0],
-      });
+    let userData;
+
+    if (results.length > 0) {
+      // User exists
+      userData = results[0];
+      console.log(`✅ Google user logged in: ${email}`);
     } else {
-      return res.json({
-        success: true,
-        existingUser: false,
-      });
+      // Create new user (Google login is trusted)
+      const [insertResult] = await db.query(
+        "INSERT INTO users (name, email, notes) VALUES (?, ?, ?)",
+        [name, email, 'Registered via Google']
+      );
+      
+      const [newUser] = await db.query(
+        "SELECT * FROM users WHERE id = ?",
+        [insertResult.insertId]
+      );
+      userData = newUser[0];
+      console.log(`🆕 New Google user registered: ${email}`);
     }
 
+    res.json({
+      success: true,
+      user: userData
+    });
+
   } catch (error) {
-    console.error("❌ Verify OTP Error:", error);
-    res.status(500).json({ success: false });
+    console.error("❌ Google Auth Error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
   }
 };
 
-// 🔹 REGISTER USER
+// 🔹 REGISTER USER (Legacy / Manual fallback)
 const registerUser = async (req, res) => {
   const { name, age, bloodGroup, notes, password, aiEnabled, email } = req.body;
 
@@ -139,8 +98,7 @@ const getUser = async (req, res) => {
 };
 
 module.exports = {
-  sendEmailOTP,
-  verifyEmailOTP,
+  googleAuth,
   registerUser,
   getUser,
 };

@@ -79,7 +79,8 @@
           "microphonePermission": "Allow SHIELD to access the microphone for emergency keywords.",
           "speechRecognitionPermission": "Allow SHIELD to securely recognize emergency voice commands."
         }
-      ]
+      ],
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true,

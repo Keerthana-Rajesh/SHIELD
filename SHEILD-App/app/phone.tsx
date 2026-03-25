@@ -1,7 +1,6 @@
 import {
   View,
   Text,
-  TextInput,
   TouchableOpacity,
   StyleSheet,
   Alert,
@@ -10,14 +9,22 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useState, useEffect } from "react";
 import { useRouter } from "expo-router";
-import { MaterialIcons } from "@expo/vector-icons";
+import { MaterialIcons, FontAwesome } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import BASE_URL from "../config/api";
+import * as WebBrowser from "expo-web-browser";
+import * as Google from "expo-auth-session/providers/google";
+
+WebBrowser.maybeCompleteAuthSession();
 
 export default function PhoneScreen() {
   const router = useRouter();
-  const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // Google Auth Setup
+  const [request, response, promptAsync] = Google.useAuthRequest({
+    webClientId: "158206063504-05kjh8j70kg11es9rn4th0d3egcklh1l.apps.googleusercontent.com",
+  });
 
   /* ================================
      ✅ Auto redirect if logged in
@@ -25,45 +32,67 @@ export default function PhoneScreen() {
   useEffect(() => {
     const checkLogin = async () => {
       const isLoggedIn = await AsyncStorage.getItem("isLoggedIn");
-
       if (isLoggedIn === "true") {
         router.replace("/dashboard");
       }
     };
-
     checkLogin();
   }, []);
 
   /* ================================
-     ✅ Send Email OTP
+     ✅ Handle Google Response
   ================================= */
-  const handleGetOtp = async () => {
-    if (!email || !email.includes("@")) {
-      Alert.alert("Invalid Email", "Enter a valid email address");
-      return;
+  useEffect(() => {
+    if (response?.type === "success") {
+      const { authentication } = response;
+      fetchUserInfo(authentication?.accessToken);
     }
+  }, [response]);
 
+  const fetchUserInfo = async (token: string | undefined) => {
+    if (!token) return;
     try {
       setLoading(true);
+      const res = await fetch("https://www.googleapis.com/userinfo/v2/me", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const user = await res.json();
 
-      const response = await fetch(
-        `${BASE_URL}/send-email-otp`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email }),
-        }
-      );
+      // Send to our backend
+      await syncWithBackend(user);
+    } catch (e) {
+      Alert.alert("Error", "Failed to get Google user info");
+      setLoading(false);
+    }
+  };
 
-      const data = await response.json();
+  const syncWithBackend = async (googleUser: any) => {
+    try {
+      const res = await fetch(`${BASE_URL}/auth/google`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: googleUser.email,
+          name: googleUser.name,
+          profile_pic: googleUser.picture
+        }),
+      });
 
-      if (response.ok && data.success) {
-        router.push(`/otp?email=${email}`);
+      const data = await res.json();
+
+      if (res.ok && data.success) {
+        // Store session
+        await AsyncStorage.setItem("isLoggedIn", "true");
+        await AsyncStorage.setItem("userId", data.user.id.toString());
+        await AsyncStorage.setItem("userName", data.user.name || "");
+        await AsyncStorage.setItem("userEmail", data.user.email);
+
+        router.replace("/dashboard");
       } else {
-        Alert.alert("Error", data.message || "Failed to send OTP");
+        Alert.alert("Auth Failed", data.message || "Backend synchronization failed");
       }
-    } catch (error) {
-      Alert.alert("Server Error", "Unable to connect to server");
+    } catch (err) {
+      Alert.alert("Server Error", "Backend is unreachable");
     } finally {
       setLoading(false);
     }
@@ -89,38 +118,24 @@ export default function PhoneScreen() {
       </View>
 
       {/* Login Section */}
-      <Text style={styles.loginTitle}>Login</Text>
+      <Text style={styles.loginTitle}>Identification Required</Text>
       <Text style={styles.loginSub}>
-        Enter your email to receive a secure code.
+        Access your safety dashboard using your Google account.
       </Text>
 
-      {/* Email Input (UI kept same) */}
-      <View style={styles.inputWrapper}>
-        <MaterialIcons name="email" size={20} color="#aaa" />
-        <TextInput
-          style={[styles.input, { marginLeft: 10 }]}
-          placeholder="Enter email address"
-          placeholderTextColor="#888"
-          keyboardType="email-address"
-          autoCapitalize="none"
-          value={email}
-          onChangeText={setEmail}
-        />
-      </View>
-
-      {/* Get OTP Button */}
+      {/* Google Login Button */}
       <TouchableOpacity
-        style={styles.button}
-        onPress={handleGetOtp}
-        disabled={loading}
+        style={styles.googleButton}
+        onPress={() => promptAsync()}
+        disabled={loading || !request}
         activeOpacity={0.8}
       >
         {loading ? (
           <ActivityIndicator color="#fff" />
         ) : (
           <>
-            <Text style={styles.buttonText}>Get OTP</Text>
-            <MaterialIcons name="arrow-forward" size={20} color="#fff" />
+            <FontAwesome name="google" size={20} color="#fff" />
+            <Text style={styles.buttonText}>Continue with Google</Text>
           </>
         )}
       </TouchableOpacity>
@@ -135,19 +150,12 @@ export default function PhoneScreen() {
       <View style={styles.secureRow}>
         <MaterialIcons name="lock" size={14} color="#666" />
         <Text style={styles.secureText}>
-          End-to-end encrypted connection
+          OAuth 2.0 Secure Session
         </Text>
       </View>
     </SafeAreaView>
   );
 }
-
-/* 🎨 Styles remain SAME */
-
-
-/* ================================
-   🎨 STYLES
-================================ */
 
 const styles = StyleSheet.create({
   container: {
@@ -199,79 +207,21 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
 
-  inputWrapper: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#1c1c1c",
-    borderRadius: 12,
-    paddingHorizontal: 15,
-    height: 55,
-    marginBottom: 20,
-  },
-
-  prefix: {
-    color: "#aaa",
-    marginRight: 10,
-  },
-
-  input: {
-    flex: 1,
-    color: "#fff",
-  },
-
-  button: {
+  googleButton: {
     flexDirection: "row",
     justifyContent: "center",
     alignItems: "center",
-    gap: 8,
+    gap: 12,
     backgroundColor: "#ec1313",
-    padding: 15,
-    borderRadius: 12,
+    padding: 16,
+    borderRadius: 15,
+    marginTop: 10,
   },
 
   buttonText: {
     color: "#fff",
     fontWeight: "bold",
     fontSize: 16,
-  },
-
-  divider: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginVertical: 30,
-  },
-
-  line: {
-    flex: 1,
-    height: 1,
-    backgroundColor: "#333",
-  },
-
-  dividerText: {
-    color: "#666",
-    marginHorizontal: 10,
-    fontSize: 10,
-    letterSpacing: 2,
-  },
-
-  altRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
-
-  altButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    backgroundColor: "#1c1c1c",
-    padding: 12,
-    borderRadius: 10,
-    width: "48%",
-    justifyContent: "center",
-  },
-
-  altText: {
-    color: "#aaa",
   },
 
   footerText: {
