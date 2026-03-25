@@ -1,33 +1,8 @@
 const db = require("../config/db");
-const nodemailer = require("nodemailer");
+const { Resend } = require("resend");
 require("dotenv").config();
 
-// ✅ FIXED transporter (Render compatible)
-const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 587,
-  secure: false, // important for Render
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-  family: 4, // 🔥 FORCE IPv4 (THIS FIXES YOUR ERROR)
-  tls: {
-    rejectUnauthorized: false,
-  },
-  connectionTimeout: 20000,
-  greetingTimeout: 20000,
-  socketTimeout: 20000,
-});
-
-// 🔍 Verify transporter on startup (optional but useful)
-transporter.verify((error, success) => {
-  if (error) {
-    console.error("❌ Email transporter error:", error);
-  } else {
-    console.log("✅ Email server is ready");
-  }
-});
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 // 🔹 SEND OTP
 const sendEmailOTP = async (req, res) => {
@@ -48,12 +23,12 @@ const sendEmailOTP = async (req, res) => {
       [email, otp]
     );
 
-    // Send email
-    await transporter.sendMail({
-      from: `"SHEILD Security" <${process.env.EMAIL_USER}>`,
+    // Send email via Resend
+    await resend.emails.send({
+      from: "SHEILD <onboarding@resend.dev>",
       to: email,
       subject: "Your SHEILD OTP Code",
-      text: `Your OTP code is ${otp}. It expires in 5 minutes.`,
+      html: `<strong>Your OTP is ${otp}</strong><br/>Valid for 5 minutes.`,
     });
 
     console.log("✅ OTP sent successfully");
