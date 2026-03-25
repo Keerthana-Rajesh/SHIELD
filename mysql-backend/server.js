@@ -58,8 +58,20 @@ app.get("/generate-signature", (req, res) => {
 // Standalone SOS Email endpoint
 const nodemailer = require("nodemailer");
 const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS },
+  host: "smtp.gmail.com",
+  port: 587,
+  secure: false,
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
+  family: 4, // 🔥 FORCE IPv4
+  tls: {
+    rejectUnauthorized: false,
+  },
+  connectionTimeout: 20000,
+  greetingTimeout: 20000,
+  socketTimeout: 20000,
 });
 
 app.post("/send-sos", async (req, res) => {
