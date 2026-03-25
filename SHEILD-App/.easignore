@@ -1,0 +1,12 @@
+node_modules/
+.expo/
+dist/
+web-build/
+android/app/build/
+android/build/
+ios/build/
+*.apk
+*.aab
+build_log.txt
+eas-build.json
+eas_build_details.json
