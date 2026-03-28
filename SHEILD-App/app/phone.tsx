@@ -74,10 +74,10 @@ export default function PhoneScreen() {
           data.message || "Invalid credentials. Please try again."
         );
       }
-    } catch (err) {
+    } catch (err: any) {
       Alert.alert(
         "Network Error",
-        "Unable to reach the server. Please check your connection and try again."
+        `Unable to reach the server.\n\nDetails: ${err.message}\nURL: ${BASE_URL}/auth/login`
       );
     } finally {
       setLoading(false);

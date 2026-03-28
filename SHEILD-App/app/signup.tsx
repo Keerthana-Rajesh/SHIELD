@@ -75,10 +75,10 @@ export default function SignupScreen() {
           data.message || "Registration failed. Please try again."
         );
       }
-    } catch (err) {
+    } catch (err: any) {
       Alert.alert(
         "Network Error",
-        "Unable to reach the server. Please check your connection and try again."
+        `Unable to reach the server.\n\nDetails: ${err.message}\nURL: ${BASE_URL}/auth/register`
       );
     } finally {
       setLoading(false);
