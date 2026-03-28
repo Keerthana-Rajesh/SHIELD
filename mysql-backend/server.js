@@ -1,3 +1,7 @@
+import aiRoutes from "./routes/ai.js";
+import dotenv from "dotenv";
+dotenv.config();
+
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
@@ -10,6 +14,7 @@ const PORT = process.env.PORT || 5000;
 // Middleware
 app.use(cors());
 app.use(express.json());
+app.use("/ai", aiRoutes);
 
 // Temp directory for uploads
 const tmpDir = path.join(__dirname, "tmp_uploads");
@@ -46,7 +51,7 @@ app.get("/generate-signature", (req, res) => {
     timestamp: timestamp,
     folder: 'shield_emergency_records'
   }, process.env.CLOUDINARY_API_SECRET);
-  
+
   res.json({
     signature,
     timestamp,
@@ -78,18 +83,18 @@ app.post("/send-sos", async (req, res) => {
   try {
     const { email, latitude, longitude, keyword, risk_level } = req.body;
     const mapUrl = `https://www.google.com/maps?q=${latitude},${longitude}`;
-    
+
     // Find trusted contacts for this user email
     const [user] = await require("./config/db").query("SELECT id FROM users WHERE email = ?", [email]);
     if (user.length === 0) return res.status(404).json({ success: false, message: "User not found" });
-    
+
     const [contacts] = await require("./config/db").query("SELECT email FROM trusted_contact WHERE user_id = ?", [user[0].id]);
-    
+
     const recipients = contacts.map(c => c.email).filter(e => e).join(",");
     if (!recipients) return res.json({ success: true, message: "No trusted emails to notify" });
 
     const mailOptions = {
-// ... rest of email logic stays same ...
+      // ... rest of email logic stays same ...
       from: process.env.EMAIL_USER,
       to: recipients,
       subject: `🚨 EMERGENCY ALERT FROM SHEILD: ${risk_level} RISK`,
@@ -122,5 +127,5 @@ app.get("/get-all-contacts-debug", async (req, res) => {
 
 // Port listener
 app.listen(PORT, "0.0.0.0", () => {
-    console.log(`🚀 SHEILD API Server running on port ${PORT}`);
+  console.log(`🚀 SHEILD API Server running on port ${PORT}`);
 });
