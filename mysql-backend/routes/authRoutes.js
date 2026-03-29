@@ -5,6 +5,7 @@ const authController = require("../controllers/authController");
 router.post("/auth/google", authController.googleAuth);
 router.post("/register-user", authController.registerUser);
 router.get("/user/:email", authController.getUser);
+router.put("/update-user/:email", authController.updateUser);
 
 // Standard Login Sync
 router.post("/auth/login", authController.login);

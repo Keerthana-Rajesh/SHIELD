@@ -99,6 +99,76 @@ const getUser = async (req, res) => {
   }
 };
 
+// Update existing user profile
+const updateUser = async (req, res) => {
+  const { email } = req.params;
+  const { name, age, bloodGroup, notes, aiEnabled } = req.body;
+
+  if (!email) {
+    return res.status(400).json({
+      success: false,
+      message: "Email is required",
+    });
+  }
+
+  if (!name || !String(name).trim()) {
+    return res.status(400).json({
+      success: false,
+      message: "Name is required",
+    });
+  }
+
+  const parsedAge =
+    age === "" || age === null || age === undefined ? null : Number(age);
+
+  if (parsedAge !== null && (!Number.isFinite(parsedAge) || parsedAge < 0)) {
+    return res.status(400).json({
+      success: false,
+      message: "Age must be a valid number",
+    });
+  }
+
+  try {
+    const [result] = await db.query(
+      `UPDATE users
+       SET name = ?, age = ?, blood_group = ?, notes = ?, ai_enabled = ?
+       WHERE email = ?`,
+      [
+        String(name).trim(),
+        parsedAge,
+        bloodGroup ? String(bloodGroup).trim() : null,
+        notes ? String(notes).trim() : "",
+        aiEnabled ? 1 : 0,
+        email,
+      ]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    const [updatedUsers] = await db.query(
+      "SELECT * FROM users WHERE email = ?",
+      [email]
+    );
+
+    return res.json({
+      success: true,
+      message: "Profile updated successfully",
+      user: updatedUsers[0],
+    });
+  } catch (error) {
+    console.error("Update User Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Database error while updating profile",
+    });
+  }
+};
+
 // 🔹 REGISTER (Standard Username/Email/Pass)
 const register = async (req, res) => {
   const { username, email, password } = req.body;
@@ -205,6 +275,7 @@ module.exports = {
   googleAuth,
   registerUser,
   getUser,
+  updateUser,
   register,
   login,
 };

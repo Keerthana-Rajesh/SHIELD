@@ -78,6 +78,8 @@ export default function Profile() {
         }
       );
 
+      const data = await response.json().catch(() => null);
+
       if (response.ok) {
         const storedId = await AsyncStorage.getItem("userId");
         if (storedId) {
@@ -85,10 +87,10 @@ export default function Profile() {
         }
         Alert.alert("Success", "Profile updated successfully!");
       } else {
-        Alert.alert("Error", "Update failed");
+        Alert.alert("Error", data?.message || "Update failed");
       }
     } catch {
-      Alert.alert("Server Error");
+      Alert.alert("Server Error", "Unable to update profile right now.");
     }
   };
   const pickImage = async () => {
