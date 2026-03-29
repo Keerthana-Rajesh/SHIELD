@@ -24,6 +24,13 @@ import { EmergencyService } from '../services/EmergencyService';
 import { GuardianServiceManager } from '../services/GuardianServiceManager';
 import * as SMS from 'expo-sms';
 import { registerGuardianTask } from '../utils/GuardianTask';
+import {
+    ensureVoicePermission,
+    isVoiceModuleAvailable,
+    safeVoiceCancel,
+    safeVoiceDestroy,
+    safeVoiceStart,
+} from '../services/voiceModule';
 
 // AI Risk Detection Thresholds
 const LOW_RISK_THRESHOLD = 3;
@@ -50,6 +57,7 @@ export default function EmergencyMonitor() {
     const listeningRef = useRef(false);
     const volumeHistory = useRef<number[]>([]);
     const listeningTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const voiceRestartTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const cancelTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const lastShakeTime = useRef<number>(0);
@@ -113,6 +121,44 @@ export default function EmergencyMonitor() {
     const blankScreenCounterRef = useRef<number>(0);
     const triggeredKeywordRef = useRef<string>('');
     const callCountdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const listeningWindowEndsAtRef = useRef<number | null>(null);
+
+    const clearVoiceRestartTimer = () => {
+        if (voiceRestartTimeoutRef.current) {
+            clearTimeout(voiceRestartTimeoutRef.current);
+            voiceRestartTimeoutRef.current = null;
+        }
+    };
+
+    const isEmergencyListeningWindowActive = () => {
+        return (
+            listeningRef.current &&
+            listeningWindowEndsAtRef.current !== null &&
+            Date.now() < listeningWindowEndsAtRef.current
+        );
+    };
+
+    const scheduleVoiceRestart = useCallback((reason: string) => {
+        if (!isEmergencyListeningWindowActive()) {
+            stopListening();
+            return;
+        }
+
+        clearVoiceRestartTimer();
+        voiceRestartTimeoutRef.current = setTimeout(async () => {
+            if (!isEmergencyListeningWindowActive()) {
+                await stopListening();
+                return;
+            }
+
+            console.log(`🎤 Restarting speech recognition during emergency window: ${reason}`);
+            const voiceStart = await safeVoiceStart('en-US');
+            if (!voiceStart.ok && isEmergencyListeningWindowActive()) {
+                console.log('Voice restart failed:', voiceStart.reason);
+                scheduleVoiceRestart(`retry after failure: ${voiceStart.reason}`);
+            }
+        }, 700);
+    }, []);
 
 
     const startGuardianService = async () => {
@@ -213,11 +259,8 @@ export default function EmergencyMonitor() {
             forceAiSub.remove();
             appStateSubscription.remove();
             volumeListener.remove();
-            Voice.destroy()
-                .then(() => {
-                    try { Voice.removeAllListeners(); } catch (e) { }
-                })
-                .catch(() => { });
+            safeVoiceDestroy().catch(() => {});
+            clearVoiceRestartTimer();
         };
     }, []);
 
@@ -245,16 +288,30 @@ export default function EmergencyMonitor() {
         }
 
         // Voice listeners
-        Voice.onSpeechResults = onSpeechResults;
-        Voice.onSpeechPartialResults = onSpeechResults;
-        Voice.onSpeechError = (e) => {
-            console.log('Speech Error:', e);
-            DeviceEventEmitter.emit("EMERGENCY_LISTENING_CANCEL");
-            Voice.destroy().then(() => {
-                listeningRef.current = false;
-                setIsListening(false);
-            });
-        };
+        if (isVoiceModuleAvailable()) {
+            Voice.onSpeechResults = onSpeechResults;
+            Voice.onSpeechPartialResults = onSpeechResults;
+            Voice.onSpeechEnd = () => {
+                if (isEmergencyListeningWindowActive()) {
+                    scheduleVoiceRestart('speech ended');
+                }
+            };
+            Voice.onSpeechError = (e) => {
+                console.log('Speech Error:', e);
+                if (isEmergencyListeningWindowActive()) {
+                    scheduleVoiceRestart(`speech error: ${JSON.stringify(e)}`);
+                    return;
+                }
+
+                DeviceEventEmitter.emit("EMERGENCY_LISTENING_CANCEL");
+                safeVoiceDestroy().finally(() => {
+                    listeningRef.current = false;
+                    setIsListening(false);
+                });
+            };
+        } else {
+            console.log("Voice native module unavailable. Emergency voice listening is disabled until the app is rebuilt.");
+        }
         
         // Initiation
         // Refresh toggles
@@ -378,10 +435,25 @@ export default function EmergencyMonitor() {
                 return;
             }
 
+            const hasPermission = await ensureVoicePermission();
+            if (!hasPermission) {
+                console.log("🎤 Microphone permission denied. Skipping emergency voice start.");
+                return;
+            }
+
+            if (!isVoiceModuleAvailable()) {
+                console.log("Voice native module unavailable. Build the Android app with expo run:android before using voice detection.");
+                return;
+            }
+
             listeningRef.current = true;
             setIsListening(true);
+            listeningWindowEndsAtRef.current = Date.now() + 30000;
             DeviceEventEmitter.emit("EMERGENCY_LISTENING_START");
-            await Voice.start('en-US');
+            const voiceStart = await safeVoiceStart('en-US');
+            if (!voiceStart.ok) {
+                throw new Error(voiceStart.reason);
+            }
 
             if (listeningTimeoutRef.current) clearTimeout(listeningTimeoutRef.current);
             listeningTimeoutRef.current = setTimeout(() => {
@@ -439,11 +511,13 @@ export default function EmergencyMonitor() {
                 clearTimeout(listeningTimeoutRef.current);
                 listeningTimeoutRef.current = null;
             }
+            clearVoiceRestartTimer();
+            listeningWindowEndsAtRef.current = null;
             listeningRef.current = false;
             setIsListening(false);
             DeviceEventEmitter.emit("EMERGENCY_LISTENING_STOP");
-            await Voice.cancel();
-            await Voice.destroy();
+            await safeVoiceCancel();
+            await safeVoiceDestroy();
         } catch (e) {
             console.log("Stop Listening Error:", e);
         }
@@ -771,8 +845,7 @@ export default function EmergencyMonitor() {
         // Stop voice detection
         console.log("🎤 Stopping voice detection...");
         try {
-            await Voice.destroy();
-            Voice.removeAllListeners();
+            await safeVoiceDestroy();
             listeningRef.current = false;
             setIsListening(false);
         } catch (e) {

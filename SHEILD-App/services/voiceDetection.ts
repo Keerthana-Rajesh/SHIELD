@@ -1,42 +1,41 @@
 import Voice from "@react-native-voice/voice";
 import { triggerLowRisk, triggerHighRisk } from "./emergencyActions";
+import {
+    isVoiceModuleAvailable,
+    safeVoiceStart,
+    safeVoiceStop,
+} from "./voiceModule";
 
 const lowRiskKeywords = ["call me", "come later"];
 const highRiskKeywords = ["help", "danger", "save me"];
 
 export const startVoiceListening = async () => {
-
-    try {
-        await Voice.start("en-US");
-    } catch (e) {
-        console.log(e);
+    const result = await safeVoiceStart("en-US");
+    if (!result.ok) {
+        console.log(result.reason);
     }
-
 };
 
 export const stopVoiceListening = async () => {
-    try {
-        await Voice.stop();
-    } catch (e) {
-        console.log("Error stopping voice:", e);
-    }
+    await safeVoiceStop();
 };
 
-Voice.onSpeechResults = (event) => {
-    if (!event.value || event.value.length === 0) {
-        return;
-    }
+if (isVoiceModuleAvailable()) {
+    Voice.onSpeechResults = (event) => {
+        if (!event.value || event.value.length === 0) {
+            return;
+        }
 
-    const spokenText = event.value[0].toLowerCase();
+        const spokenText = event.value[0].toLowerCase();
 
-    console.log("Heard:", spokenText);
+        console.log("Heard:", spokenText);
 
-    if (lowRiskKeywords.some(word => spokenText.includes(word))) {
-        triggerLowRisk();
-    }
+        if (lowRiskKeywords.some(word => spokenText.includes(word))) {
+            triggerLowRisk();
+        }
 
-    if (highRiskKeywords.some(word => spokenText.includes(word))) {
-        triggerHighRisk();
-    }
-
-};
+        if (highRiskKeywords.some(word => spokenText.includes(word))) {
+            triggerHighRisk();
+        }
+    };
+}

@@ -50,6 +50,7 @@
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
+      "./plugins/withVectorIconsAndroid",
       "expo-router",
       [
         "expo-splash-screen",
@@ -81,7 +82,8 @@
           "speechRecognitionPermission": "Allow SHIELD to securely recognize emergency voice commands."
         }
       ],
-      "expo-web-browser"
+      "expo-web-browser",
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true,

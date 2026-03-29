@@ -22,10 +22,14 @@ import EmergencyOverlay from "../components/EmergencyOverlay";
 import * as IntentLauncher from 'expo-intent-launcher';
 import { Audio } from 'expo-av';
 import { aiRiskEngine, RiskAnalysis } from "../utils/AiRiskEngine";
-import Voice from "@react-native-voice/voice";
 import { ActivityService, Activity } from "../services/ActivityService";
 import { EmergencyService } from "../services/EmergencyService";
 import { GuardianServiceManager } from "../services/GuardianServiceManager";
+import {
+  ensureVoicePermission,
+  isVoiceModuleAvailable,
+  safeVoiceStop,
+} from "../services/voiceModule";
 
 export default function Dashboard() {
   const router = useRouter();
@@ -143,10 +147,26 @@ export default function Dashboard() {
 
   const toggleMic = async () => {
     const newVal = !micEnabled;
+
+    if (newVal) {
+      const hasPermission = await ensureVoicePermission();
+      if (!hasPermission) {
+        setMicEnabled(true);
+        await AsyncStorage.setItem("MIC_ENABLED", "true");
+        setMicStatus("Needs Permission");
+        Alert.alert(
+          "Microphone permission required",
+          "Allow microphone access to enable emergency keyword detection."
+        );
+        DeviceEventEmitter.emit("STATUS_TOGGLE_CHANGED");
+        return;
+      }
+    }
+
     setMicEnabled(newVal);
     await AsyncStorage.setItem("MIC_ENABLED", newVal.toString());
-    if (!newVal) {
-      await Voice.stop();
+    if (!newVal && isVoiceModuleAvailable()) {
+      await safeVoiceStop();
       await aiRiskEngine.stopFullAnalysis(); // Mic is part of full analysis
     }
     DeviceEventEmitter.emit("STATUS_TOGGLE_CHANGED");
@@ -206,15 +226,19 @@ export default function Dashboard() {
         setMicStatus("Off");
       } else {
         try {
-          const { status: audioPerm } = await Audio.getPermissionsAsync();
-          if (audioPerm !== "granted") {
-            setMicStatus("Disabled");
+          if (!isVoiceModuleAvailable()) {
+            setMicStatus("Unavailable");
           } else {
-            const isEngineAnalyzing = aiRiskEngine.isAnalysisActive();
-            if (isEngineAnalyzing) {
-              setMicStatus("Listening");
+            const { status: audioPerm } = await Audio.getPermissionsAsync();
+            if (audioPerm !== "granted") {
+              setMicStatus("Needs Permission");
             } else {
-              setMicStatus("Active");
+              const isEngineAnalyzing = aiRiskEngine.isAnalysisActive();
+              if (isEngineAnalyzing) {
+                setMicStatus("Listening");
+              } else {
+                setMicStatus("Active");
+              }
             }
           }
         } catch (e) {
