@@ -19,6 +19,37 @@ export const voiceRuntime: {
   onSpeechError: null,
 };
 
+// 🔊 Setup Native Module Event Listener Hookups
+if (ExpoSpeechRecognitionModule) {
+  ExpoSpeechRecognitionModule.addSpeechRecognitionListener("start", () => {
+    console.log("🎤 Voice Recognition Started");
+  });
+
+  ExpoSpeechRecognitionModule.addSpeechRecognitionListener("result", (event: SpeechResultsEvent) => {
+    if (voiceRuntime.onSpeechResults) {
+      voiceRuntime.onSpeechResults(event);
+    }
+  });
+
+  ExpoSpeechRecognitionModule.addSpeechRecognitionListener("partialResult", (event: SpeechResultsEvent) => {
+    if (voiceRuntime.onSpeechPartialResults) {
+      voiceRuntime.onSpeechPartialResults(event);
+    }
+  });
+
+  ExpoSpeechRecognitionModule.addSpeechRecognitionListener("end", () => {
+    if (voiceRuntime.onSpeechEnd) {
+      voiceRuntime.onSpeechEnd();
+    }
+  });
+
+  ExpoSpeechRecognitionModule.addSpeechRecognitionListener("error", (error: SpeechErrorEvent) => {
+    if (voiceRuntime.onSpeechError) {
+      voiceRuntime.onSpeechError(error);
+    }
+  });
+}
+
 export function isVoiceModuleAvailable() {
   return Boolean(ExpoSpeechRecognitionModule);
 }
@@ -113,6 +144,8 @@ export async function safeVoiceStart(
       options.androidRecognitionServicePackage ??
       getPreferredAndroidRecognitionService();
 
+    console.log("🎤 Starting speech recognition engine...");
+    
     ExpoSpeechRecognitionModule.start({
       lang: locale,
       interimResults: true,

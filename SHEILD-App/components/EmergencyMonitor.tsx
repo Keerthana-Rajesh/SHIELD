@@ -16,8 +16,9 @@ import BASE_URL from '../config/api';
 import * as IntentLauncher from 'expo-intent-launcher';
 import { MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import AiAnalysisPopup from './AiAnalysisPopup';
 import { foregroundCallService } from '../services/ForegroundCallService';
-import { aiRiskEngine, RiskAnalysis, SensorData } from '../utils/AiRiskEngine';
+import { aiRiskEngine, MovementDetectionEvent, RiskAnalysis, SensorData } from '../utils/AiRiskEngine';
 import { ActivityService } from '../services/ActivityService';
 import { EmergencyService } from '../services/EmergencyService';
 import { GuardianServiceManager } from '../services/GuardianServiceManager';
@@ -68,14 +69,19 @@ export default function EmergencyMonitor() {
     const voiceRestartTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const cancelTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const analysisProgressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const lastShakeTime = useRef<number>(0);
+    const analysisReadyRef = useRef(true);
 
     // AI Risk Detection State
     const [aiRiskLevel, setAiRiskLevel] = useState<'LOW' | 'HIGH' | 'NONE'>('NONE');
     const [aiRiskTriggers, setAiRiskTriggers] = useState<string[]>([]);
     const [aiConfidence, setAiConfidence] = useState<number>(0);
     const [showAiRiskAlert, setShowAiRiskAlert] = useState(false);
-    const [showAiAnalyzingPopup, setShowAiAnalyzingPopup] = useState(false);
+    const [isAnalyzing, setIsAnalyzing] = useState(false);
+    const [detectedMovement, setDetectedMovement] = useState<string | null>(null);
+    const [analysisProgress, setAnalysisProgress] = useState(0);
+    const [analysisStatusText, setAnalysisStatusText] = useState("Idle");
     const [isEmergencyActive, setIsEmergencyActive] = useState(false);
     
     // AI Sensor Data Storage
@@ -308,6 +314,16 @@ export default function EmergencyMonitor() {
             });
         });
 
+        const movementUnsubscribe = aiRiskEngine.subscribeMovement((movementEvent) => {
+            if (showHighWarning || showLowWarning || isEmergencyActive) {
+                return;
+            }
+
+            startAiAnalysisSequence(movementEvent).catch((error) => {
+                console.log("AI analysis sequence error:", error);
+            });
+        });
+
         // App State Listener for Background/Foreground transitions
         const appStateSubscription = AppState.addEventListener('change', handleAppStateChange);
 
@@ -323,25 +339,117 @@ export default function EmergencyMonitor() {
             toggleSub.remove();
             aiRiskSub.remove();
             forceAiSub.remove();
+            movementUnsubscribe?.();
             appStateSubscription.remove();
             volumeListener.remove();
             safeVoiceDestroy().catch(() => {});
             clearVoiceRestartTimer();
+            clearAiAnalysisProgress();
         };
     }, []);
 
-    useEffect(() => {
-        const interval = setInterval(() => {
-            const shouldShow =
-                aiRiskEngine.isAnalysisActive() &&
-                !showLowWarning &&
-                !showHighWarning &&
-                !showCamera;
-            setShowAiAnalyzingPopup(shouldShow);
-        }, 800);
+    const clearAiAnalysisProgress = useCallback(() => {
+        if (analysisProgressIntervalRef.current) {
+            clearInterval(analysisProgressIntervalRef.current);
+            analysisProgressIntervalRef.current = null;
+        }
+    }, []);
 
-        return () => clearInterval(interval);
-    }, [showLowWarning, showHighWarning, showCamera]);
+    const getAnalysisStatusText = (progressValue: number) => {
+        if (progressValue < 34) return "Analyzing motion pattern...";
+        if (progressValue < 68) return "Checking sensor intensity...";
+        return "Evaluating risk level...";
+    };
+
+    const updateGuardianAnalysisUi = useCallback(async (
+        next: {
+            isAnalyzing: boolean;
+            detectedMovement: string | null;
+            progress: number;
+            statusText: string;
+            riskLevel: 'LOW' | 'HIGH' | 'NONE' | null;
+        }
+    ) => {
+        await GuardianStateService.saveAnalysisUi(next);
+    }, []);
+
+    const cancelAiDetection = useCallback(async () => {
+        clearAiAnalysisProgress();
+        analysisReadyRef.current = true;
+        setIsAnalyzing(false);
+        setDetectedMovement(null);
+        setAnalysisProgress(0);
+        setAnalysisStatusText("Idle");
+        setAiRiskLevel('NONE');
+        setAiConfidence(0);
+        setAiRiskTriggers([]);
+        await aiRiskEngine.stopFullAnalysis();
+        await updateGuardianAnalysisUi({
+            isAnalyzing: false,
+            detectedMovement: null,
+            progress: 0,
+            statusText: "Detection cancelled",
+            riskLevel: null,
+        });
+    }, [clearAiAnalysisProgress, updateGuardianAnalysisUi]);
+
+    const startAiAnalysisSequence = useCallback(async (movementEvent: MovementDetectionEvent) => {
+        clearAiAnalysisProgress();
+        analysisReadyRef.current = false;
+        setDetectedMovement(movementEvent.movementType);
+        setIsAnalyzing(true);
+        setAnalysisProgress(0);
+        setAnalysisStatusText("Analyzing motion pattern...");
+        await updateGuardianAnalysisUi({
+            isAnalyzing: true,
+            detectedMovement: movementEvent.movementType,
+            progress: 0,
+            statusText: "Analyzing motion pattern...",
+            riskLevel: null,
+        });
+
+        let nextProgress = 0;
+        analysisProgressIntervalRef.current = setInterval(async () => {
+            nextProgress = Math.min(100, nextProgress + 8);
+            const nextStatusText = getAnalysisStatusText(nextProgress);
+            setAnalysisProgress(nextProgress);
+            setAnalysisStatusText(nextStatusText);
+            await updateGuardianAnalysisUi({
+                isAnalyzing: true,
+                detectedMovement: movementEvent.movementType,
+                progress: nextProgress,
+                statusText: nextStatusText,
+                riskLevel: null,
+            });
+
+            if (nextProgress >= 100) {
+                clearAiAnalysisProgress();
+                analysisReadyRef.current = true;
+                setIsAnalyzing(false);
+                const analysis = await aiRiskEngine.performRiskAnalysis();
+                await updateGuardianAnalysisUi({
+                    isAnalyzing: false,
+                    detectedMovement: movementEvent.movementType,
+                    progress: 100,
+                    statusText:
+                        analysis.riskLevel === 'HIGH'
+                            ? "User is in Danger"
+                            : analysis.riskLevel === 'LOW'
+                              ? "Risk evaluation completed"
+                              : "No Threat Detected",
+                    riskLevel: analysis.riskLevel,
+                });
+
+                if (!isEmergencyActive && !showHighWarning && !showLowWarning && !isCancelledRef.current) {
+                    if (analysis.riskLevel === 'HIGH') {
+                        triggerHighRiskAiAlert(analysis);
+                    } else if (analysis.riskLevel === 'LOW') {
+                        triggerLowRiskAiAlert(analysis);
+                    }
+                }
+            }
+        }, 250);
+    }, [clearAiAnalysisProgress, isEmergencyActive, showHighWarning, showLowWarning, updateGuardianAnalysisUi]);
 
     const setup = async () => {
         const id = await AsyncStorage.getItem("userId");
@@ -466,15 +574,33 @@ export default function EmergencyMonitor() {
                 fetch(`${BASE_URL}/get-keywords/${id}/LOW`),
                 fetch(`${BASE_URL}/get-keywords/${id}/HIGH`)
             ]);
-            const dataLow = await resLow.json();
-            const dataHigh = await resHigh.json();
+            let lowList: string[] = [];
+            let highList: string[] = [];
 
-            const lowList = Array.isArray(dataLow)
-                ? dataLow.map((k: any) => k.keyword_text.toLowerCase()).filter((k: string) => k.trim().length > 0)
-                : [];
-            const highList = Array.isArray(dataHigh)
-                ? dataHigh.map((k: any) => k.keyword_text.toLowerCase()).filter((k: string) => k.trim().length > 0)
-                : [];
+            if (resLow.ok && resHigh.ok) {
+                const dataLow = await resLow.json();
+                const dataHigh = await resHigh.json();
+
+                lowList = Array.isArray(dataLow)
+                    ? dataLow.map((k: any) => k.keyword_text.toLowerCase()).filter((k: string) => k.trim().length > 0)
+                    : [];
+                highList = Array.isArray(dataHigh)
+                    ? dataHigh.map((k: any) => k.keyword_text.toLowerCase()).filter((k: string) => k.trim().length > 0)
+                    : [];
+            }
+
+            if (lowList.length === 0 && highList.length === 0) {
+                const fallbackRes = await fetch(`${BASE_URL}/keywords/${id}`);
+                if (fallbackRes.ok) {
+                    const fallbackData = await fallbackRes.json();
+                    lowList = Array.isArray(fallbackData.lowRiskKeywords)
+                        ? fallbackData.lowRiskKeywords.map((k: string) => k.toLowerCase()).filter((k: string) => k.trim().length > 0)
+                        : [];
+                    highList = Array.isArray(fallbackData.highRiskKeywords)
+                        ? fallbackData.highRiskKeywords.map((k: string) => k.toLowerCase()).filter((k: string) => k.trim().length > 0)
+                        : [];
+                }
+            }
 
             setLowRiskKeywords(lowList);
             setHighRiskKeywords(highList);
@@ -488,12 +614,16 @@ export default function EmergencyMonitor() {
     const activateEmergencyListening = async () => {
         console.log("🔥 EMERGENCY LISTENING ACTIVATED");
         try {
-            if (!userId) {
-                const id = await AsyncStorage.getItem("userId");
-                if (id) {
-                    setUserId(id);
-                    await fetchKeywords(id);
+            let activeUserId = userId;
+            if (!activeUserId) {
+                activeUserId = await AsyncStorage.getItem("userId");
+                if (activeUserId) {
+                    setUserId(activeUserId);
                 }
+            }
+
+            if (activeUserId) {
+                await fetchKeywords(activeUserId);
             }
 
             const micEnabled = await AsyncStorage.getItem("MIC_ENABLED");
@@ -521,6 +651,7 @@ export default function EmergencyMonitor() {
             const contextualStrings = Array.from(
                 new Set([...keywordsRef.current.low, ...keywordsRef.current.high])
             );
+            console.log('Emergency listening keywords:', contextualStrings);
             const voiceStart = await safeVoiceStart('en-US', {
                 contextualStrings,
                 interimResults: true,
@@ -945,6 +1076,7 @@ export default function EmergencyMonitor() {
         
         setIsEmergencyActive(false);
         setAiRiskLevel('NONE');
+        await cancelAiDetection();
         
         // RESET Emergency ID and Sync SAFE state to DB
         if (currentEmergencyId) {
@@ -980,6 +1112,7 @@ export default function EmergencyMonitor() {
         setIsRecording(false);
         setIsEmergencyActive(false);
         setAiRiskLevel('NONE');
+        await cancelAiDetection();
 
         // After 5s, re-enable AI monitoring in passive mode
         setTimeout(async () => {
@@ -1030,6 +1163,10 @@ export default function EmergencyMonitor() {
             setAiRiskTriggers(analysis.triggers);
 
             // Handle UI triggers from the subscription (triggered by background task or active detection)
+            if (!analysisReadyRef.current) {
+                return;
+            }
+
             if (!isEmergencyActive && !showHighWarning && !showLowWarning && !isCancelledRef.current) {
                 if (analysis.riskLevel === 'HIGH') {
                     triggerHighRiskAiAlert(analysis);
@@ -1056,6 +1193,13 @@ export default function EmergencyMonitor() {
         
         console.log('🚨 AI HIGH RISK ALERT');
         ActivityService.logActivity(`AI_RISK_DETECTED_HIGH: ${analysis.triggers.join(', ')}`, currentEmergencyId);
+        updateGuardianAnalysisUi({
+            isAnalyzing: false,
+            detectedMovement,
+            progress: 100,
+            statusText: "User is in Danger",
+            riskLevel: 'HIGH',
+        }).catch(() => {});
         setIsEmergencyActive(true);
         setShowAiRiskAlert(true);
         setShowHighWarning(true);
@@ -1096,6 +1240,13 @@ export default function EmergencyMonitor() {
         
         console.log('⚠️ AI LOW RISK ALERT');
         ActivityService.logActivity(`AI_RISK_DETECTED_LOW: ${analysis.triggers.join(', ')}`, currentEmergencyId);
+        updateGuardianAnalysisUi({
+            isAnalyzing: false,
+            detectedMovement,
+            progress: 100,
+            statusText: "Risk evaluation completed",
+            riskLevel: 'LOW',
+        }).catch(() => {});
         setShowLowWarning(true);
         setLowCountdown(5);
         setAiRiskLevel('LOW');
@@ -1526,8 +1677,9 @@ export default function EmergencyMonitor() {
                         location_link: locationStr,
                         recording_url: cloudData.secure_url,
                         cloudinary_public_id: cloudData.public_id,
-                        contacts: contacts,
                         device_id: deviceId,
+                        media_type: type,
+                        risk_level: 'HIGH',
                     }),
                 });
 
@@ -1591,12 +1743,13 @@ export default function EmergencyMonitor() {
                 </View>
             )}
 
-            {showAiAnalyzingPopup && (
-                <View style={styles.aiAnalyzingPopup}>
-                    <View style={styles.aiAnalyzingDot} />
-                    <Text style={styles.aiAnalyzingText}>AI is analyzing...</Text>
-                </View>
-            )}
+            <AiAnalysisPopup
+                visible={isAnalyzing}
+                detectedMovement={detectedMovement || "Movement detected"}
+                progress={analysisProgress}
+                statusText={analysisStatusText}
+                onCancel={cancelAiDetection}
+            />
 
             {/* ───── LOW RISK WARNING MODAL ───── */}
             <Modal visible={showLowWarning} transparent animationType="fade">

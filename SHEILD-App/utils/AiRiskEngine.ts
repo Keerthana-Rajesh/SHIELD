@@ -1,7 +1,9 @@
 import { Accelerometer, Gyroscope, LightSensor } from 'expo-sensors';
 import { Audio } from 'expo-av';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ActivityService } from '../services/ActivityService';
 import BASE_URL from "../config/api";
+import { startVoiceListening, stopVoiceListening } from '../services/voiceDetection';
 
 const analyzeWithAI = async (text: string) => {
     try {
@@ -48,6 +50,13 @@ export interface RiskAnalysis {
     sensorData: SensorData;
 }
 
+export interface MovementDetectionEvent {
+    movementType: 'Sudden Fall Detected' | 'Violent Shaking Detected' | 'Rapid Movement Detected' | 'Device Drop Detected';
+    magnitude: number;
+    delta: number;
+    timestamp: number;
+}
+
 class AiRiskEngine {
     private static instance: AiRiskEngine;
     private sensorHistory: SensorData[] = [];
@@ -63,6 +72,7 @@ class AiRiskEngine {
     private micLevelInterval: ReturnType<typeof setInterval> | null = null;
     private analysisInterval: ReturnType<typeof setInterval> | null = null;
     private subscribers: ((analysis: RiskAnalysis) => void)[] = [];
+    private movementSubscribers: ((event: MovementDetectionEvent) => void)[] = [];
 
     private accelerometerSubscription: { remove: () => void } | null = null;
     private gyroscopeSubscription: { remove: () => void } | null = null;
@@ -86,6 +96,12 @@ class AiRiskEngine {
 
         console.log('AiRiskEngine: Starting passive movement monitoring');
 
+        // (NEW) Start voice listening when monitoring starts, if enabled
+        const micEnabledSetting = await AsyncStorage.getItem("MIC_ENABLED");
+        if (micEnabledSetting !== "false") {
+            startVoiceListening().catch(e => console.log("Voice start failed in passive monitoring:", e));
+        }
+
         Accelerometer.setUpdateInterval(200);
         this.accelerometerSubscription = Accelerometer.addListener(data => {
             this.accelerometerData = data;
@@ -105,14 +121,16 @@ class AiRiskEngine {
                     movementDelta > MOVEMENT_DELTA_THRESHOLD;
 
                 if (suspiciousMovementDetected && cooldownElapsed) {
+                    const movementEvent = this.buildMovementDetectionEvent(magnitude, movementDelta);
                     console.log(
-                        `AiRiskEngine: Suspicious movement detected (magnitude=${magnitude.toFixed(2)}, delta=${movementDelta.toFixed(2)}). Starting full analysis.`
+                        `AiRiskEngine: ${movementEvent.movementType} (magnitude=${magnitude.toFixed(2)}, delta=${movementDelta.toFixed(2)}). Starting full analysis.`
                     );
 
                     ActivityService.logActivity(
-                        `AI RISK: Suspicious movement detected (Magnitude ${magnitude.toFixed(2)}, Delta ${movementDelta.toFixed(2)})`
+                        `AI RISK: ${movementEvent.movementType} (Magnitude ${magnitude.toFixed(2)}, Delta ${movementDelta.toFixed(2)})`
                     );
 
+                    this.notifyMovementSubscribers(movementEvent);
                     this.lastFullAnalysisStartedAt = Date.now();
                     this.startFullAnalysis().catch(error => {
                         console.error('Error auto-starting full analysis:', error);
@@ -125,6 +143,9 @@ class AiRiskEngine {
     public async stopMonitoring() {
         this.isMonitoring = false;
         await this.stopFullAnalysis();
+
+        // (NEW) Stop voice listening when monitoring stops
+        stopVoiceListening().catch(e => console.log("Voice stop failed in stopMonitoring:", e));
 
         if (this.accelerometerSubscription) {
             this.accelerometerSubscription.remove();
@@ -151,6 +172,9 @@ class AiRiskEngine {
             });
 
             await this.startAudioMonitoring();
+            
+            // Start keyword detection in parallel
+            startVoiceListening().catch(e => console.log("Voice start failed in engine:", e));
 
             if (this.analysisInterval) {
                 clearInterval(this.analysisInterval);
@@ -208,6 +232,9 @@ class AiRiskEngine {
             }
         }
 
+        // Stop keyword detection
+        stopVoiceListening().catch(e => console.log("Voice stop failed in engine:", e));
+
         console.log('AiRiskEngine: Reverted to passive mode');
     }
 
@@ -259,6 +286,28 @@ class AiRiskEngine {
     private calculateMovementMagnitude(data: { x: number; y: number; z: number } | null): number {
         if (!data) return 0;
         return Math.sqrt(data.x * data.x + data.y * data.y + data.z * data.z);
+    }
+
+    private buildMovementDetectionEvent(
+        magnitude: number,
+        delta: number
+    ): MovementDetectionEvent {
+        let movementType: MovementDetectionEvent["movementType"] = "Rapid Movement Detected";
+
+        if (magnitude < 0.9 && delta > 1.8) {
+            movementType = "Device Drop Detected";
+        } else if (magnitude < 1.2 && delta > 1.35) {
+            movementType = "Sudden Fall Detected";
+        } else if (magnitude > 3.3 || delta > 2.0) {
+            movementType = "Violent Shaking Detected";
+        }
+
+        return {
+            movementType,
+            magnitude,
+            delta,
+            timestamp: Date.now(),
+        };
     }
 
     public async performRiskAnalysis(): Promise<RiskAnalysis> {
@@ -423,8 +472,19 @@ class AiRiskEngine {
         };
     }
 
+    public subscribeMovement(callback: (event: MovementDetectionEvent) => void) {
+        this.movementSubscribers.push(callback);
+        return () => {
+            this.movementSubscribers = this.movementSubscribers.filter(cb => cb !== callback);
+        };
+    }
+
     private notifySubscribers(analysis: RiskAnalysis) {
         this.subscribers.forEach(cb => cb(analysis));
+    }
+
+    private notifyMovementSubscribers(event: MovementDetectionEvent) {
+        this.movementSubscribers.forEach(cb => cb(event));
     }
 
     public isAnalysisActive(): boolean {

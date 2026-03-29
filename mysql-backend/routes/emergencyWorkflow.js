@@ -17,6 +17,10 @@ router.post("/emergency/video", emergencyController.storeVideo);
 router.post("/emergency/evidence", emergencyController.storeEvidence);
 router.post("/emergency/alert", emergencyController.logAlert);
 router.post("/emergency/call", emergencyController.logCall);
+router.post("/trigger-emergency-protocol", emergencyController.triggerEmergencyProtocol);
+router.get("/recordings/:email", emergencyController.getRecordingsByEmail);
+router.delete("/delete-recording/:id", emergencyController.deleteRecording);
+router.delete("/delete-cloudinary/:publicId", emergencyController.deleteCloudinaryAsset);
 
 // Activity logging related
 router.post("/activity/log", activityController.logActivity);
@@ -27,6 +31,7 @@ router.post("/notification", activityController.logNotification);
 // Special Features related
 router.post("/fake-call", specialFeaturesController.triggerFakeCall);
 router.post("/access-link", specialFeaturesController.createAccessLink);
+router.get("/generate-qr/:userId", specialFeaturesController.generateQrLink);
 router.post("/qr/trigger", specialFeaturesController.triggerQR);
 
 module.exports = router;

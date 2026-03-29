@@ -83,13 +83,18 @@ export default function LowRiskKeywords() {
 
     const deleteKeyword = async (id: number) => {
         try {
-            await fetch(`${BASE_URL}/delete-keyword/${id}`, {
+            const response = await fetch(`${BASE_URL}/delete-keyword/${id}`, {
                 method: "DELETE",
             });
+
+            if (!response.ok) {
+                throw new Error("Failed to delete low risk keyword");
+            }
 
             loadKeywords();
         } catch (error) {
             console.error("Delete Error:", error);
+            Alert.alert("Error", "Could not delete low risk keyword");
         }
     };
 

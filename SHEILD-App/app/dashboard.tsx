@@ -29,8 +29,8 @@ import { GuardianStateService } from "../services/GuardianStateService";
 import {
   ensureVoicePermission,
   isVoiceModuleAvailable,
-  safeVoiceStop,
 } from "../services/voiceModule";
+import { startVoiceListening, stopVoiceListening } from "../services/voiceDetection";
 
 export default function Dashboard() {
   const router = useRouter();
@@ -166,9 +166,14 @@ export default function Dashboard() {
 
     setMicEnabled(newVal);
     await AsyncStorage.setItem("MIC_ENABLED", newVal.toString());
-    if (!newVal && isVoiceModuleAvailable()) {
-      await safeVoiceStop();
-      await aiRiskEngine.stopFullAnalysis(); // Mic is part of full analysis
+
+    if (newVal) {
+      if (aiRiskEngine.isMonitoringActive()) {
+        startVoiceListening().catch(console.error);
+      }
+    } else {
+      stopVoiceListening().catch(console.error);
+      aiRiskEngine.stopFullAnalysis().catch(console.error); 
     }
     DeviceEventEmitter.emit("STATUS_TOGGLE_CHANGED");
   };

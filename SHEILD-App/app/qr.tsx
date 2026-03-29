@@ -18,6 +18,8 @@ import BASE_URL from "../config/api";
 import * as Clipboard from 'expo-clipboard';
 
 const { width } = Dimensions.get("window");
+const buildFallbackQrUrl = (userId: string, userEmail: string) =>
+    `${BASE_URL}/qr-emergency?userId=${encodeURIComponent(userId)}&email=${encodeURIComponent(userEmail)}`;
 
 export default function QRPage() {
     const router = useRouter();
@@ -70,19 +72,26 @@ export default function QRPage() {
                 const qrRes = await fetch(`${BASE_URL}/generate-qr/${storedId}`);
                 if (qrRes.ok) {
                     const qrData = await qrRes.json();
-                    setQrUrl(qrData.qrUrl);
+                    setQrUrl(qrData.qrUrl || buildFallbackQrUrl(storedId, storedEmail));
                 } else {
                     const qrData = await qrRes.json().catch(() => null);
-                    setQrUrl(null);
-                    setQrError(qrData?.message || "Failed to generate QR link.");
+                    setQrUrl(buildFallbackQrUrl(storedId, storedEmail));
+                    setQrError(qrData?.message || "Using fallback QR link.");
                     console.error("Failed to fetch QR, status:", qrRes.status);
                 }
             }
         } catch (error) {
             console.error("QR Load Error:", error);
-            setQrUrl(null);
-            setQrError("Could not prepare QR. Please check your connection.");
-            Alert.alert("Error", "Could not prepare QR. Please check your connection.");
+            const storedId = await AsyncStorage.getItem("userId");
+            const storedEmail = await AsyncStorage.getItem("userEmail");
+            if (storedId && storedEmail) {
+                setQrUrl(buildFallbackQrUrl(storedId, storedEmail));
+                setQrError("Using fallback QR link.");
+            } else {
+                setQrUrl(null);
+                setQrError("Could not prepare QR. Please check your connection.");
+                Alert.alert("Error", "Could not prepare QR. Please check your connection.");
+            }
         } finally {
             setLoading(false);
         }
@@ -92,12 +101,15 @@ export default function QRPage() {
         loadData();
     }, [loadData]);
 
+    const resolvedQrUrl =
+        qrUrl || (userId && userEmail ? buildFallbackQrUrl(userId, userEmail) : null);
+
     const handleShare = async () => {
-        if (!qrUrl) return;
+        if (!resolvedQrUrl) return;
         try {
             await Share.share({
-                message: `My SHIELD Emergency Access link: ${qrUrl}`,
-                url: qrUrl,
+                message: `My SHIELD Emergency Access link: ${resolvedQrUrl}`,
+                url: resolvedQrUrl,
                 title: "SHIELD Emergency QR"
             });
         } catch (error) {
@@ -106,8 +118,8 @@ export default function QRPage() {
     };
 
     const handleCopy = async () => {
-        if (!qrUrl) return;
-        await Clipboard.setStringAsync(qrUrl);
+        if (!resolvedQrUrl) return;
+        await Clipboard.setStringAsync(resolvedQrUrl);
         Alert.alert("Success", "Link copied to clipboard!");
     };
 
@@ -182,15 +194,15 @@ export default function QRPage() {
             <ScrollView contentContainerStyle={styles.scrollContent}>
                 <View style={styles.qrSection}>
                     <View style={styles.qrContainer}>
-                        {qrUrl && (
+                        {resolvedQrUrl && (
                             <QRCode
-                                value={qrUrl}
+                                value={resolvedQrUrl}
                                 size={width * 0.55}
-                                color="#fff"
-                                backgroundColor="transparent"
+                                color="#111"
+                                backgroundColor="#fff"
                             />
                         )}
-                        {!qrUrl && (
+                        {!resolvedQrUrl && (
                             <View style={styles.qrMissingState}>
                                 <MaterialIcons name="qr-code-2" size={52} color="#666" />
                                 <Text style={styles.qrMissingText}>
@@ -200,6 +212,11 @@ export default function QRPage() {
                         )}
                     </View>
                     <Text style={styles.scanHint}>Scan to send emergency alert</Text>
+                    {resolvedQrUrl && (
+                        <Text style={styles.qrUrlText} numberOfLines={2}>
+                            {resolvedQrUrl}
+                        </Text>
+                    )}
                 </View>
 
                 {/* ACTION BUTTONS */}
@@ -298,10 +315,10 @@ const styles = StyleSheet.create({
     },
     qrContainer: {
         padding: 20,
-        backgroundColor: "rgba(255,255,255,0.05)",
+        backgroundColor: "#fff",
         borderRadius: 20,
         borderWidth: 1,
-        borderColor: "rgba(255,255,255,0.1)",
+        borderColor: "rgba(255,255,255,0.2)",
         minWidth: width * 0.65,
         minHeight: width * 0.65,
         alignItems: "center",
@@ -326,6 +343,13 @@ const styles = StyleSheet.create({
         marginTop: 20,
         fontSize: 14,
         fontWeight: "500",
+    },
+    qrUrlText: {
+        color: "#666",
+        marginTop: 12,
+        fontSize: 11,
+        maxWidth: width * 0.8,
+        textAlign: "center",
     },
     iconCircle: {
         width: 120,

@@ -62,7 +62,7 @@ export default function HighRiskKeywords() {
                 return;
             }
 
-            await fetch(`${BASE_URL}/add-keyword`, {
+            const response = await fetch(`${BASE_URL}/add-keyword`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -72,22 +72,33 @@ export default function HighRiskKeywords() {
                 }),
             });
 
+            if (!response.ok) {
+                const data = await response.json().catch(() => null);
+                throw new Error(data?.message || "Failed to add high risk keyword");
+            }
+
             setInput("");
             loadKeywords();
         } catch (error) {
             console.log("Add High Keyword Error:", error);
+            Alert.alert("Error", "Could not save high risk keyword");
         }
     };
 
     const deleteKeyword = async (id: number) => {
         try {
-            await fetch(`${BASE_URL}/delete-keyword/${id}`, {
+            const response = await fetch(`${BASE_URL}/delete-keyword/${id}`, {
                 method: "DELETE",
             });
+
+            if (!response.ok) {
+                throw new Error("Failed to delete high risk keyword");
+            }
 
             loadKeywords();
         } catch (error) {
             console.log("Delete High Keyword Error:", error);
+            Alert.alert("Error", "Could not delete high risk keyword");
         }
     };
 

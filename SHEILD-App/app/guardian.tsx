@@ -14,6 +14,7 @@ import { useEffect, useState } from "react";
 import { aiRiskEngine, RiskAnalysis, SensorData } from "../utils/AiRiskEngine";
 import { ActivityService } from "../services/ActivityService";
 import {
+    GuardianAnalysisUiState,
     GuardianMonitoringStatus,
     GuardianSnapshot,
     GuardianStateService,
@@ -26,12 +27,20 @@ export default function Guardian() {
     const [isMonitoring, setIsMonitoring] = useState(false);
     const [isFullAnalysis, setIsFullAnalysis] = useState(false);
     const [monitoringStatus, setMonitoringStatus] = useState<GuardianMonitoringStatus>("OFF");
+    const [analysisUi, setAnalysisUi] = useState<GuardianAnalysisUiState>({
+        isAnalyzing: false,
+        detectedMovement: null,
+        progress: 0,
+        statusText: "Idle",
+        riskLevel: null,
+    });
 
     useEffect(() => {
         const loadSnapshot = async () => {
             const snapshot = await GuardianStateService.getSnapshot();
             setAnalysis(snapshot.analysis);
             setMonitoringStatus(snapshot.monitoringStatus);
+            setAnalysisUi(snapshot.analysisUi);
             setIsMonitoring(snapshot.monitoringStatus !== "OFF");
             setIsFullAnalysis(
                 snapshot.monitoringStatus === "ACTIVE" || snapshot.monitoringStatus === "EMERGENCY"
@@ -43,6 +52,7 @@ export default function Guardian() {
             setAnalysis(nextAnalysis);
             const snapshot = await GuardianStateService.getSnapshot();
             setMonitoringStatus(snapshot.monitoringStatus);
+            setAnalysisUi(snapshot.analysisUi);
             setIsMonitoring(snapshot.monitoringStatus !== "OFF");
             setIsFullAnalysis(
                 snapshot.monitoringStatus === "ACTIVE" || snapshot.monitoringStatus === "EMERGENCY"
@@ -58,6 +68,7 @@ export default function Guardian() {
             (snapshot: GuardianSnapshot) => {
                 setAnalysis(snapshot.analysis);
                 setMonitoringStatus(snapshot.monitoringStatus);
+                setAnalysisUi(snapshot.analysisUi);
                 setIsMonitoring(snapshot.monitoringStatus !== "OFF");
                 setIsFullAnalysis(
                     snapshot.monitoringStatus === "ACTIVE" || snapshot.monitoringStatus === "EMERGENCY"
@@ -81,6 +92,7 @@ export default function Guardian() {
 
     const riskLevel = analysis?.riskLevel || 'NONE';
     const confidence = analysis ? Math.round(analysis.confidence * 100) : 0;
+    const livePercent = analysisUi.isAnalyzing ? analysisUi.progress : confidence;
     const triggers = analysis?.triggers || [];
     const monitorTitle =
         monitoringStatus === "EMERGENCY"
@@ -94,7 +106,9 @@ export default function Guardian() {
         monitoringStatus === "EMERGENCY"
             ? "Guardian detected a live threat and escalated monitoring"
             : monitoringStatus === "ACTIVE"
-              ? "Analyzing sensors and microphone in real time"
+              ? analysisUi.isAnalyzing
+                ? analysisUi.statusText
+                : "Analyzing sensors and microphone in real time"
               : monitoringStatus === "PASSIVE"
                 ? "Background guardian is running for this logged-in account"
                 : "Sign in and keep sensors enabled to monitor in background";
@@ -142,7 +156,9 @@ export default function Guardian() {
                     </View>
 
                     <Text style={styles.monitorTitle}>
-                        {monitorTitle}
+                        {analysisUi.isAnalyzing && analysisUi.detectedMovement
+                            ? `Analyzing: ${analysisUi.detectedMovement}`
+                            : monitorTitle}
                     </Text>
                     <Text style={styles.monitorSubtitle}>
                         {monitorSubtitle}
@@ -154,7 +170,7 @@ export default function Guardian() {
                     <Indicator label="Microphone" status={isFullAnalysis ? "Active" : isMonitoring ? "Armed" : "Off"} active={isMonitoring} />
                     <Indicator label="Live Location" status={isMonitoring ? "Ready" : "Off"} active={isMonitoring} />
                     <Indicator label="Motion Sensors" status={isMonitoring ? "Streaming" : "Standby"} active={isMonitoring} />
-                    <Indicator label="Pattern Recognition" status={monitoringStatus === "EMERGENCY" ? "Escalated" : isMonitoring ? "Learning" : "Paused"} active={isMonitoring} />
+                    <Indicator label="Pattern Recognition" status={analysisUi.isAnalyzing ? "Evaluating" : monitoringStatus === "EMERGENCY" ? "Escalated" : isMonitoring ? "Learning" : "Paused"} active={isMonitoring} />
                 </View>
 
                 {/* Threat Section */}
@@ -164,7 +180,7 @@ export default function Guardian() {
                     </Text>
 
                     <View style={styles.threatRow}>
-                        <Text style={styles.threatPercent}>{confidence}%</Text>
+                        <Text style={styles.threatPercent}>{livePercent}%</Text>
                         <Text style={[
                             styles.riskLabel, 
                             { color: riskLevel === 'HIGH' ? "#EC1313" : riskLevel === 'LOW' ? "#eab308" : "#22c55e" }
@@ -174,8 +190,21 @@ export default function Guardian() {
                     </View>
 
                     <View style={styles.progressBar}>
-                        <View style={[styles.progressFill, { width: `${Math.max(5, confidence)}%`, backgroundColor: riskLevel === 'HIGH' ? "#EC1313" : "#22c55e" }]} />
+                        <View style={[styles.progressFill, { width: `${Math.max(5, livePercent)}%`, backgroundColor: analysisUi.isAnalyzing ? "#EC1313" : riskLevel === 'HIGH' ? "#EC1313" : "#22c55e" }]} />
                     </View>
+                    {analysisUi.isAnalyzing && (
+                        <View style={styles.analysisLiveCard}>
+                            <View style={styles.analysisPulse} />
+                            <View style={{ flex: 1 }}>
+                                <Text style={styles.analysisMovementText}>
+                                    {analysisUi.detectedMovement || "Movement detected"}
+                                </Text>
+                                <Text style={styles.analysisStatusText}>
+                                    {analysisUi.statusText} {analysisUi.progress}%
+                                </Text>
+                            </View>
+                        </View>
+                    )}
                 </View>
 
                 {/* Observations */}
@@ -520,5 +549,32 @@ const styles = StyleSheet.create({
         color: "#22c55e",
         fontWeight: '600',
         fontSize: 14
+    },
+    analysisLiveCard: {
+        marginTop: 14,
+        borderRadius: 14,
+        backgroundColor: "#120c0c",
+        borderWidth: 1,
+        borderColor: "rgba(236,19,19,0.32)",
+        padding: 14,
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 12,
+    },
+    analysisPulse: {
+        width: 12,
+        height: 12,
+        borderRadius: 6,
+        backgroundColor: "#ec1313",
+    },
+    analysisMovementText: {
+        color: "#fff",
+        fontSize: 14,
+        fontWeight: "700",
+    },
+    analysisStatusText: {
+        color: "#bca6a6",
+        marginTop: 4,
+        fontSize: 12,
     }
 });

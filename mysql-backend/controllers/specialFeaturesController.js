@@ -32,6 +32,34 @@ const createAccessLink = async (req, res) => {
   }
 };
 
+const generateQrLink = async (req, res) => {
+  const { userId } = req.params;
+
+  if (!userId) {
+    return res.status(400).json({ success: false, message: "User ID is required" });
+  }
+
+  try {
+    const [users] = await db.query("SELECT id FROM users WHERE id = ?", [userId]);
+
+    if (users.length === 0) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    const qrUrl = `https://sheild-4puz.onrender.com/qr-emergency?userId=${encodeURIComponent(
+      String(userId)
+    )}`;
+
+    return res.json({
+      success: true,
+      qrUrl,
+    });
+  } catch (error) {
+    console.error("Error generating QR link:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
 // QR Trigger (Simplified logic as per prompt)
 const triggerQR = async (req, res) => {
   const { token, user_id, latitude, longitude } = req.body;
@@ -67,5 +95,6 @@ const triggerQR = async (req, res) => {
 module.exports = {
   triggerFakeCall,
   createAccessLink,
+  generateQrLink,
   triggerQR
 };

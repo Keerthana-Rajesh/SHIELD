@@ -12,9 +12,18 @@ const MIC_ENABLED_KEY = "MIC_ENABLED";
 
 export type GuardianMonitoringStatus = "OFF" | "PASSIVE" | "ACTIVE" | "EMERGENCY";
 
+export interface GuardianAnalysisUiState {
+  isAnalyzing: boolean;
+  detectedMovement: string | null;
+  progress: number;
+  statusText: string;
+  riskLevel: "LOW" | "HIGH" | "NONE" | null;
+}
+
 export interface GuardianSnapshot {
   analysis: RiskAnalysis;
   monitoringStatus: GuardianMonitoringStatus;
+  analysisUi: GuardianAnalysisUiState;
   updatedAt: number;
 }
 
@@ -34,6 +43,13 @@ const DEFAULT_ANALYSIS: RiskAnalysis = {
 const DEFAULT_SNAPSHOT: GuardianSnapshot = {
   analysis: DEFAULT_ANALYSIS,
   monitoringStatus: "OFF",
+  analysisUi: {
+    isAnalyzing: false,
+    detectedMovement: null,
+    progress: 0,
+    statusText: "Idle",
+    riskLevel: null,
+  },
   updatedAt: Date.now(),
 };
 
@@ -61,6 +77,7 @@ export const GuardianStateService = {
       return {
         analysis: parsed.analysis || DEFAULT_ANALYSIS,
         monitoringStatus: parsed.monitoringStatus || monitoringStatus,
+        analysisUi: parsed.analysisUi || DEFAULT_SNAPSHOT.analysisUi,
         updatedAt: parsed.updatedAt || Date.now(),
       };
     } catch (error) {
@@ -101,6 +118,7 @@ export const GuardianStateService = {
     const nextSnapshot: GuardianSnapshot = {
       analysis,
       monitoringStatus: nextStatus,
+      analysisUi: snapshot.analysisUi || DEFAULT_SNAPSHOT.analysisUi,
       updatedAt: Date.now(),
     };
 
@@ -108,6 +126,27 @@ export const GuardianStateService = {
     await AsyncStorage.setItem(GUARDIAN_MONITORING_KEY, nextStatus);
     DeviceEventEmitter.emit("GUARDIAN_SNAPSHOT_UPDATED", nextSnapshot);
 
+    return nextSnapshot;
+  },
+
+  async saveAnalysisUi(analysisUi: GuardianAnalysisUiState) {
+    const snapshot = await this.getSnapshot();
+    const nextSnapshot: GuardianSnapshot = {
+      ...snapshot,
+      analysisUi,
+      monitoringStatus:
+        analysisUi.isAnalyzing && snapshot.monitoringStatus === "PASSIVE"
+          ? "ACTIVE"
+          : snapshot.monitoringStatus,
+      updatedAt: Date.now(),
+    };
+
+    await AsyncStorage.multiSet([
+      [GUARDIAN_STATE_KEY, JSON.stringify(nextSnapshot)],
+      [GUARDIAN_MONITORING_KEY, nextSnapshot.monitoringStatus],
+    ]);
+
+    DeviceEventEmitter.emit("GUARDIAN_SNAPSHOT_UPDATED", nextSnapshot);
     return nextSnapshot;
   },
 

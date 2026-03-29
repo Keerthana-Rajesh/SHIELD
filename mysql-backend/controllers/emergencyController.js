@@ -1,4 +1,48 @@
 const db = require("../config/db");
+const nodemailer = require("nodemailer");
+const cloudinary = require("cloudinary").v2;
+
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
+const transporter = nodemailer.createTransport({
+  host: "smtp.gmail.com",
+  port: 587,
+  secure: false,
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
+  family: 4,
+  tls: {
+    rejectUnauthorized: false,
+  },
+  connectionTimeout: 20000,
+  greetingTimeout: 20000,
+  socketTimeout: 20000,
+});
+
+const getEmergencyRecipients = async (userId) => {
+  const [trustedContacts] = await db.query(
+    "SELECT email FROM trusted_contact WHERE user_id = ?",
+    [userId]
+  );
+  const [legacyContacts] = await db.query(
+    "SELECT contact_email FROM contacts WHERE user_id = ?",
+    [userId]
+  );
+
+  return [
+    ...trustedContacts.map((contact) => contact.email),
+    ...legacyContacts.map((contact) => contact.contact_email),
+  ]
+    .filter((value) => typeof value === "string" && value.trim().length > 0)
+    .map((value) => value.trim().toLowerCase())
+    .filter((value, index, array) => array.indexOf(value) === index);
+};
 
 const startEmergency = async (req, res) => {
   const { user_id, detected_keyword, location_url } = req.body;
@@ -23,7 +67,7 @@ const endEmergency = async (req, res) => {
   const { emergency_id } = req.body;
   try {
     await db.query(
-      "UPDATE emergency_incidents SET status = 'RESOLVED', end_time = NOW() WHERE id = ?",
+      "UPDATE emergency_incidents SET status = 'RESOLVED' WHERE id = ?",
       [emergency_id]
     );
     res.json({ success: true, message: "Emergency incident resolved" });
@@ -103,6 +147,181 @@ const logCall = async (req, res) => {
   }
 };
 
+const triggerEmergencyProtocol = async (req, res) => {
+  const {
+    user_id,
+    keyword,
+    location_link,
+    recording_url,
+    cloudinary_public_id,
+    device_id,
+    risk_level,
+    media_type,
+  } = req.body;
+
+  if (!user_id || !recording_url) {
+    return res
+      .status(400)
+      .json({ success: false, message: "user_id and recording_url are required" });
+  }
+
+  try {
+    const [users] = await db.query(
+      "SELECT id, email FROM users WHERE id = ?",
+      [user_id]
+    );
+
+    if (users.length === 0) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    const user = users[0];
+    const recordingType = media_type || "video";
+    const filename = recording_url.split("/").pop() || `emergency_${recordingType}`;
+
+    const [recordingResult] = await db.query(
+      "INSERT INTO emergency_recordings (user_id, type, url, filename, recorded_at) VALUES (?, ?, ?, ?, NOW())",
+      [user_id, recordingType, recording_url, filename]
+    );
+
+    const [activeIncidents] = await db.query(
+      "SELECT id FROM emergency_incidents WHERE user_id = ? AND status = 'ACTIVE' ORDER BY created_at DESC LIMIT 1",
+      [user_id]
+    );
+
+    let emergencyId = null;
+    if (activeIncidents.length > 0) {
+      emergencyId = activeIncidents[0].id;
+      await db.query(
+        "UPDATE emergency_incidents SET recording_url = ?, cloudinary_public_id = ?, contacts_notified = 'PENDING' WHERE id = ?",
+        [recording_url, cloudinary_public_id || null, emergencyId]
+      );
+      await db.query(
+        "INSERT INTO cloud_evidence (emergency_id, evidence_type, upload_time, retention_status) VALUES (?, ?, NOW(), 'ACTIVE')",
+        [emergencyId, recordingType]
+      );
+    }
+
+    const recipients = await getEmergencyRecipients(user_id);
+    if (recipients.length > 0) {
+      const subject = `SHEILD Emergency Evidence: ${(risk_level || "HIGH").toUpperCase()} RISK`;
+      const text = `Emergency evidence captured for ${user.email}.
+Trigger: ${keyword || "High-risk detected"}
+Location: ${location_link || "Unavailable"}
+Recording URL: ${recording_url}
+Device: ${device_id || "Unknown"}
+`;
+
+      const html = `<h3>SHEILD Emergency Evidence</h3>
+        <p><strong>User:</strong> ${user.email}</p>
+        <p><strong>Risk level:</strong> ${(risk_level || "HIGH").toUpperCase()}</p>
+        <p><strong>Trigger:</strong> ${keyword || "High-risk detected"}</p>
+        <p><strong>Location:</strong> ${
+          location_link
+            ? `<a href="${location_link}">${location_link}</a>`
+            : "Unavailable"
+        }</p>
+        <p><strong>Recording URL:</strong> <a href="${recording_url}">${recording_url}</a></p>
+        <p><strong>Device:</strong> ${device_id || "Unknown"}</p>`;
+
+      await transporter.sendMail({
+        from: process.env.EMAIL_USER,
+        to: recipients.join(","),
+        subject,
+        text,
+        html,
+      });
+
+      if (emergencyId) {
+        await db.query(
+          "UPDATE emergency_incidents SET contacts_notified = 'YES' WHERE id = ?",
+          [emergencyId]
+        );
+      }
+    }
+
+    return res.status(201).json({
+      success: true,
+      recording_id: recordingResult.insertId,
+      emergency_id: emergencyId,
+      message: "Emergency protocol executed",
+    });
+  } catch (error) {
+    console.error("Error triggering emergency protocol:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+const getRecordingsByEmail = async (req, res) => {
+  const { email } = req.params;
+
+  try {
+    const [users] = await db.query("SELECT id FROM users WHERE email = ?", [email]);
+    if (users.length === 0) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    const userId = users[0].id;
+    const [rows] = await db.query(
+      `SELECT 
+          er.id,
+          er.type,
+          er.url,
+          er.filename,
+          er.recorded_at,
+          ei.detected_keyword AS keyword,
+          ei.location_url AS location
+       FROM emergency_recordings er
+       LEFT JOIN emergency_incidents ei
+         ON ei.user_id = er.user_id
+        AND ei.recording_url = er.url
+       WHERE er.user_id = ?
+       ORDER BY er.recorded_at DESC`,
+      [userId]
+    );
+
+    return res.json(rows);
+  } catch (error) {
+    console.error("Error fetching recordings:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+const deleteRecording = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const [result] = await db.query(
+      "DELETE FROM emergency_recordings WHERE id = ?",
+      [id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ success: false, message: "Recording not found" });
+    }
+
+    return res.json({ success: true, message: "Recording deleted" });
+  } catch (error) {
+    console.error("Error deleting recording:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+const deleteCloudinaryAsset = async (req, res) => {
+  const { publicId } = req.params;
+
+  try {
+    const result = await cloudinary.uploader.destroy(publicId, {
+      resource_type: "video",
+    });
+
+    return res.json({ success: true, result });
+  } catch (error) {
+    console.error("Error deleting Cloudinary asset:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
 module.exports = {
   startEmergency,
   endEmergency,
@@ -110,5 +329,9 @@ module.exports = {
   storeVideo,
   storeEvidence,
   logAlert,
-  logCall
+  logCall,
+  triggerEmergencyProtocol,
+  getRecordingsByEmail,
+  deleteRecording,
+  deleteCloudinaryAsset,
 };
