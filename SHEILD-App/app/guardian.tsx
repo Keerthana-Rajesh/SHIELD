@@ -23,7 +23,7 @@ export default function Guardian() {
 
     useEffect(() => {
         // Initial state
-        setAnalysis(aiRiskEngine.performRiskAnalysis());
+        aiRiskEngine.performRiskAnalysis().then(setAnalysis);
         setIsMonitoring(aiRiskEngine.isMonitoringActive());
 
         // Listen for engine updates

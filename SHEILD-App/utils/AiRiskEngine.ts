@@ -2,6 +2,26 @@ import { Accelerometer, Gyroscope, LightSensor } from 'expo-sensors';
 import { Audio } from 'expo-av';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ActivityService } from '../services/ActivityService';
+import BASE_URL from "../config/api";
+
+const analyzeWithAI = async (text: string) => {
+    try {
+        const res = await fetch(`${BASE_URL}/ai/analyze`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ text }),
+        });
+
+        const data = await res.json();
+
+        return data.risk; // "HIGH" or "LOW"
+    } catch (err) {
+        console.log("AI error:", err);
+        return "LOW";
+    }
+};
 
 // AI Risk Detection Thresholds
 const LOW_RISK_THRESHOLD = 3;
@@ -37,19 +57,19 @@ class AiRiskEngine {
     private gyroscopeData: { x: number; y: number; z: number } | null = null;
     private lightData: number = 100;
     private micLevelHistory: number[] = [];
-    
+
     private recording: Audio.Recording | null = null;
     private isMonitoring: boolean = false; // Is the engine alive?
     private isAnalysisRunning: boolean = false; // Are we actively analyzing audio/sensors?
-    
+
     private micLevelInterval: ReturnType<typeof setInterval> | null = null;
     private subscribers: ((analysis: RiskAnalysis) => void)[] = [];
-    
+
     private accelerometerSubscription: { remove: () => void } | null = null;
     private gyroscopeSubscription: { remove: () => void } | null = null;
     private lightSubscription: { remove: () => void } | null = null;
 
-    private constructor() {}
+    private constructor() { }
 
     public static getInstance(): AiRiskEngine {
         if (!AiRiskEngine.instance) {
@@ -66,18 +86,18 @@ class AiRiskEngine {
         this.isMonitoring = true;
 
         console.log('🤖 AiRiskEngine: Starting passive movement monitoring');
-        
+
         // Use Accelerometer only for initial movement detection
         Accelerometer.setUpdateInterval(200);
         this.accelerometerSubscription = Accelerometer.addListener(data => {
             this.accelerometerData = data;
-            
+
             // Auto-trigger full analysis if movement exceeds threshold
             if (!this.isAnalysisRunning) {
                 const magnitude = this.calculateMovementMagnitude(data);
                 if (magnitude > MOVEMENT_THRESHOLD) {
                     console.log(`🤖 AiRiskEngine: Suspicious movement detected (${magnitude.toFixed(2)}). Starting full analysis.`);
-                    
+
                     ActivityService.logActivity(`AI RISK: Suspicious movement detected (Magnitude ${magnitude.toFixed(2)})`);
 
                     this.startFullAnalysis();
@@ -122,7 +142,7 @@ class AiRiskEngine {
 
             // Start Audio Monitoring (Strict instance management)
             await this.startAudioMonitoring();
-            
+
             console.log('🤖 AiRiskEngine: Full analysis mode ACTIVE');
         } catch (error) {
             console.error('Error starting full analysis:', error);
@@ -135,7 +155,7 @@ class AiRiskEngine {
      */
     public async stopFullAnalysis() {
         this.isAnalysisRunning = false;
-        
+
         if (this.gyroscopeSubscription) {
             this.gyroscopeSubscription.remove();
             this.gyroscopeSubscription = null;
@@ -170,7 +190,7 @@ class AiRiskEngine {
         try {
             // Safety: ensure no existing recording exists
             if (this.recording) {
-                try { await this.recording.stopAndUnloadAsync(); } catch (e) {}
+                try { await this.recording.stopAndUnloadAsync(); } catch (e) { }
                 this.recording = null;
             }
 
@@ -202,7 +222,7 @@ class AiRiskEngine {
                                 this.micLevelHistory = this.micLevelHistory.slice(-20);
                             }
                         }
-                    } catch (e) {}
+                    } catch (e) { }
                 }
             }, 500);
         } catch (error) {
@@ -219,12 +239,12 @@ class AiRiskEngine {
     /**
      * Logic called periodically (by BackgroundTask or UI) to evaluate the situation
      */
-    public performRiskAnalysis(): RiskAnalysis {
+    public async performRiskAnalysis(): Promise<RiskAnalysis> {
         // If we aren't in analysis mode, we report NONE but still collect recent sensor data
-        const currentMicLevel = this.micLevelHistory.length > 0 
-            ? this.micLevelHistory[this.micLevelHistory.length - 1] 
+        const currentMicLevel = this.micLevelHistory.length > 0
+            ? this.micLevelHistory[this.micLevelHistory.length - 1]
             : 0;
-            
+
         const currentSensorData: SensorData = {
             accelerometer: this.accelerometerData,
             gyroscope: this.gyroscopeData,
@@ -232,7 +252,7 @@ class AiRiskEngine {
             microphoneLevel: currentMicLevel,
             timestamp: Date.now()
         };
-        
+
         this.sensorHistory.push(currentSensorData);
         if (this.sensorHistory.length > 50) {
             this.sensorHistory = this.sensorHistory.slice(-50);
@@ -247,47 +267,47 @@ class AiRiskEngine {
                 sensorData: currentSensorData
             };
         }
-        
+
         const triggers: string[] = [];
         let totalRiskScore = 0;
-        
+
         // 1. Fall Detection
         const fallScore = this.analyzeFallDetection();
         if (fallScore > 0) {
             totalRiskScore += fallScore;
             triggers.push('Sudden fall detected');
         }
-        
+
         // 2. Shaking Patterns
         const shake = this.analyzeShakingPatterns();
         if (shake.score > 0) {
             totalRiskScore += shake.score;
             triggers.push(...shake.triggers);
         }
-        
+
         // 3. Dark Environment
         const lightScore = this.analyzeDarkEnvironment();
         if (lightScore > 0) {
             totalRiskScore += lightScore;
             triggers.push('Sudden darkness detected');
         }
-        
+
         // 4. Sound Intensity (Panic/Shouting)
         const soundScore = this.analyzeSoundIntensity();
         if (soundScore > 0) {
             totalRiskScore += soundScore;
             triggers.push('High sound intensity (shouting)');
         }
-        
+
         let riskLevel: 'LOW' | 'HIGH' | 'NONE' = 'NONE';
         if (totalRiskScore >= HIGH_RISK_THRESHOLD) {
             riskLevel = 'HIGH';
         } else if (totalRiskScore >= LOW_RISK_THRESHOLD) {
             riskLevel = 'LOW';
         }
-        
+
         const confidence = Math.min(totalRiskScore / 10, 1.0);
-        
+
         const analysis: RiskAnalysis = {
             riskLevel,
             confidence,
@@ -296,9 +316,34 @@ class AiRiskEngine {
         };
 
         if (riskLevel !== 'NONE') {
-            this.notifySubscribers(analysis);
+            const contextText = `Emergency signals: ${triggers.join(", ")}. Sound level: ${currentMicLevel}`;
+
+            console.log("🧠 Sending to AI:", contextText);
+
+            const aiRisk = await analyzeWithAI(contextText);
+
+            if (aiRisk === "HIGH") {
+                console.log("🚨 AI confirmed emergency");
+
+                const finalAnalysis: RiskAnalysis = {
+                    ...analysis,
+                    riskLevel: "HIGH"
+                };
+
+                this.notifySubscribers(finalAnalysis);
+                return finalAnalysis;
+
+            } else {
+                console.log("🟢 AI says safe, ignoring");
+
+                return {
+                    ...analysis,
+                    riskLevel: "NONE",
+                    confidence: 0
+                } as RiskAnalysis;
+            }
         }
-        
+
         return analysis;
     }
 
@@ -307,7 +352,7 @@ class AiRiskEngine {
         const recent = this.sensorHistory.slice(-10);
         let freeFallDetected = 0;
         let impactDetected = false;
-        
+
         recent.forEach(data => {
             if (data.accelerometer) {
                 const magnitude = this.calculateMovementMagnitude(data.accelerometer);
@@ -315,7 +360,7 @@ class AiRiskEngine {
                 if (magnitude > 3.0) impactDetected = true;
             }
         });
-        
+
         return (freeFallDetected >= 3 && impactDetected) ? SCORE_FALL_DETECTION : 0;
     }
 
@@ -324,14 +369,14 @@ class AiRiskEngine {
         const recent = this.sensorHistory.slice(-15);
         let highIntensityCount = 0;
         let triggers: string[] = [];
-        
+
         recent.forEach(data => {
             if (data.accelerometer) {
                 const magnitude = this.calculateMovementMagnitude(data.accelerometer);
                 if (magnitude > 2.5) highIntensityCount++;
             }
         });
-        
+
         if (highIntensityCount >= 8) return { score: SCORE_REPEATED_SHAKING, triggers: ['Repeated strong shaking'] };
         if (highIntensityCount >= 3) return { score: SCORE_STRONG_SHAKE, triggers: ['Strong shake detected'] };
         return { score: 0, triggers: [] };

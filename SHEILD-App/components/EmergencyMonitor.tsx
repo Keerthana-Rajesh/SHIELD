@@ -877,8 +877,8 @@ export default function EmergencyMonitor() {
         }
     }, []);
     
-    const performRiskAnalysis = (): RiskAnalysis => {
-        return aiRiskEngine.performRiskAnalysis();
+    const performRiskAnalysis = async (): Promise<RiskAnalysis> => {
+        return await aiRiskEngine.performRiskAnalysis();
     };
     
     const startAiRiskDetection = () => {

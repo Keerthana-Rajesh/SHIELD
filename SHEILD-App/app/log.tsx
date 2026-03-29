@@ -29,23 +29,24 @@ export default function PreviousActivityScreen() {
         setRefreshing(false);
     };
 
-    const formatTime = (ts: number) => {
+    const formatTime = (ts: string | number) => {
         const date = new Date(ts);
         return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     };
 
-    const formatDate = (ts: number) => {
+    const formatDate = (ts: string | number) => {
         const date = new Date(ts);
         return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
     };
 
-    const getActivityIcon = (type: string, level: string) => {
-        if (type === 'AI_RISK') return "smart-toy";
+    const getActivityIcon = (type: string | undefined, level: string | undefined) => {
+        if (type === 'AI_RISK' || type === 'AI_RISK_DETECTED_HIGH' || type === 'AI_RISK_DETECTED_LOW') return "smart-toy";
         if (type === 'KEYWORD') return "mic";
         return "warning";
     };
 
-    const getLevelColor = (level: string) => {
+    const getLevelColor = (level: string | undefined) => {
+        if (!level) return "#13ec5b"; 
         if (level === 'HIGH') return "#ec1313";
         if (level === 'LOW') return "#f1c40f";
         return "#13ec5b";
@@ -82,32 +83,38 @@ export default function PreviousActivityScreen() {
                         <Text style={styles.emptySub}>All systems are monitoring normally</Text>
                     </View>
                 ) : (
-                    activities.map((item, index) => (
-                        <View key={item.id} style={styles.timelineItem}>
-                            {/* Left Line */}
-                            <View style={styles.timelineLineWrap}>
-                                <View style={[styles.timelineDot, { backgroundColor: getLevelColor(item.level) }]} />
-                                {index !== activities.length - 1 && <View style={styles.timelineLine} />}
-                            </View>
-
-                            {/* Content */}
-                            <View style={styles.activityCard}>
-                                <View style={styles.cardHeader}>
-                                    <View style={[styles.iconBox, { backgroundColor: `${getLevelColor(item.level)}20` }]}>
-                                        <MaterialIcons name={getActivityIcon(item.type, item.level) as any} size={20} color={getLevelColor(item.level)} />
-                                    </View>
-                                    <View style={styles.titleWrap}>
-                                        <Text style={styles.itemTitle}>{item.title}</Text>
-                                        <Text style={styles.itemTime}>{formatDate(item.timestamp)} • {formatTime(item.timestamp)}</Text>
-                                    </View>
-                                    <View style={[styles.levelBadge, { backgroundColor: `${getLevelColor(item.level)}30` }]}>
-                                        <Text style={[styles.levelText, { color: getLevelColor(item.level) }]}>{item.level}</Text>
-                                    </View>
+                    activities.map((item, index) => {
+                        const level = item.level || 'STABLE';
+                        const type = item.type || item.activity_type;
+                         const title = item.title || (type === 'AI_RISK_DETECTED_HIGH' ? 'High Risk Movement' : type === 'AI_RISK_DETECTED_LOW' ? 'Suspicious Activity' : 'Security Alert');
+                        
+                        return (
+                            <View key={item.id} style={styles.timelineItem}>
+                                {/* Left Line */}
+                                <View style={styles.timelineLineWrap}>
+                                    <View style={[styles.timelineDot, { backgroundColor: getLevelColor(level) }]} />
+                                    {index !== activities.length - 1 && <View style={styles.timelineLine} />}
                                 </View>
-                                <Text style={styles.itemDetails}>{item.details}</Text>
+
+                                {/* Content */}
+                                <View style={styles.activityCard}>
+                                    <View style={styles.cardHeader}>
+                                        <View style={[styles.iconBox, { backgroundColor: `${getLevelColor(level)}20` }]}>
+                                            <MaterialIcons name={getActivityIcon(type, level) as any} size={20} color={getLevelColor(level)} />
+                                        </View>
+                                        <View style={styles.titleWrap}>
+                                            <Text style={styles.itemTitle}>{title}</Text>
+                                            <Text style={styles.itemTime}>{formatDate(item.timestamp)} • {formatTime(item.timestamp)}</Text>
+                                        </View>
+                                        <View style={[styles.levelBadge, { backgroundColor: `${getLevelColor(level)}30` }]}>
+                                            <Text style={[styles.levelText, { color: getLevelColor(level) }]}>{level}</Text>
+                                        </View>
+                                    </View>
+                                    <Text style={styles.itemDetails}>{item.details || item.activity_type}</Text>
+                                </View>
                             </View>
-                        </View>
-                    ))
+                        );
+                    })
                 )}
             </ScrollView>
 

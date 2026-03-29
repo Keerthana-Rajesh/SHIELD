@@ -13,7 +13,7 @@ export const backgroundMonitoringTask = async (data: any) => {
     await aiRiskEngine.startMonitoring();
 
     try {
-        const analysis = aiRiskEngine.performRiskAnalysis();
+        const analysis = await aiRiskEngine.performRiskAnalysis();
         
         if (analysis.riskLevel !== 'NONE') {
             console.log(`🛡️ SHIELD Background: ${analysis.riskLevel} risk detected!`);

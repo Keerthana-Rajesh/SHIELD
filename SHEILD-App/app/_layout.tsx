@@ -1,8 +1,13 @@
 import React, { useEffect } from "react";
 import { LogBox, Platform, BackHandler } from "react-native";
 import ReactNativeForegroundService from "@supersami/rn-foreground-service";
-
+import * as SplashScreen from "expo-splash-screen";
+import { Stack } from "expo-router";
+import EmergencyMonitor from "../components/EmergencyMonitor";
 import { backgroundMonitoringTask } from "../services/BackgroundTask";
+
+// Keep splash screen visible (optional)
+SplashScreen.preventAutoHideAsync();
 
 ReactNativeForegroundService.register({
   config: {
@@ -13,28 +18,34 @@ ReactNativeForegroundService.register({
   },
 });
 
-// Register the background task
+// Register background task
 ReactNativeForegroundService.add_task(backgroundMonitoringTask, {
-    delay: 1000,
-    onLoop: true,
-    taskId: "shield_monitor_task",
-    onError: (e) => console.log(`Error in SHIELD task:`, e),
+  delay: 1000,
+  onLoop: true,
+  taskId: "shield_monitor_task",
+  onError: (e) => console.log(`Error in SHIELD task:`, e),
 });
 
+// Ignore expo-av warning
 LogBox.ignoreLogs(["[expo-av]: Expo AV has been deprecated"]);
 
 const originalWarn = console.warn;
-console.warn = (...args) => {
-  if (typeof args[0] === "string" && args[0].includes("Expo AV has been deprecated")) {
+console.warn = (...args: any[]) => {
+  if (
+    typeof args[0] === "string" &&
+    args[0].includes("Expo AV has been deprecated")
+  ) {
     return;
   }
   originalWarn(...args);
 };
 
-import { Stack } from "expo-router";
-import EmergencyMonitor from "../components/EmergencyMonitor";
-
 export default function Layout() {
+  useEffect(() => {
+    // Hide splash immediately (no font loading needed)
+    SplashScreen.hideAsync();
+  }, []);
+
   useEffect(() => {
     // Start foreground service
     try {
@@ -47,23 +58,24 @@ export default function Layout() {
         button2: false,
         setOnlyAlertOnce: "true",
         color: "#ec1313",
-        ServiceType: Platform.OS === 'android' ? "location|microphone|camera|foregroundService" : "microphone",
+        ServiceType:
+          Platform.OS === "android"
+            ? "location|microphone|camera|foregroundService"
+            : "microphone",
       } as any);
+
       console.log("✅ SHIELD Guardian Foreground Service Started");
     } catch (e) {
       console.log("Foreground Service errored: ", e);
     }
 
-    // Prevent back button from closing app during emergency
-    const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
-      // Return false to allow default behavior (can be customized)
-      return false;
-    });
+    const backHandler = BackHandler.addEventListener(
+      "hardwareBackPress",
+      () => false
+    );
 
     return () => {
       backHandler.remove();
-      // NOTE: We do NOT stop the foreground service here 
-      // so it continues monitoring even when the app is closed/killed.
     };
   }, []);
 

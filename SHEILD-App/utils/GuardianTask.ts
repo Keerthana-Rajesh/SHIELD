@@ -14,7 +14,7 @@ export const registerGuardianTask = () => {
     ReactNativeForegroundService.add_task(async () => {
         try {
             // 1. Perform AI Risk Analysis
-            const analysis = aiRiskEngine.performRiskAnalysis();
+            const analysis = await aiRiskEngine.performRiskAnalysis();
 
             // 2. Broadcast internal events for UI updates
             DeviceEventEmitter.emit('AI_RISK_DETECTED', analysis);
