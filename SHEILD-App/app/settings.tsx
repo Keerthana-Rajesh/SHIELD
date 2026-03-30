@@ -12,6 +12,7 @@ import { MaterialIcons } from "@expo/vector-icons";
 import { useState, useEffect } from "react";
 import { useRouter } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { DeviceEventEmitter } from "react-native";
 import { ProfileService } from "../services/EmergencyService";
 
 export default function Settings() {
@@ -38,7 +39,21 @@ export default function Settings() {
         }
         // Also save to AsyncStorage for legacy local logic
         await AsyncStorage.setItem("VOLUME_TRIGGER_ENABLED", val.toString());
+        DeviceEventEmitter.emit("STATUS_TOGGLE_CHANGED");
     };
+
+    useEffect(() => {
+        const loadSettings = async () => {
+            const storedVolumeTrigger = await AsyncStorage.getItem("VOLUME_TRIGGER_ENABLED");
+            if (storedVolumeTrigger !== null) {
+                setVolumeTrigger(storedVolumeTrigger === "true");
+            }
+        };
+
+        loadSettings().catch((error) => {
+            console.log("Failed to load settings:", error);
+        });
+    }, []);
 
 
     return (

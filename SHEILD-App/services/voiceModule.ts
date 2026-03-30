@@ -150,17 +150,89 @@ function getPreferredAndroidRecognitionService() {
       return undefined;
     }
 
-    if (services.includes("com.google.android.as")) {
-      return "com.google.android.as";
-    }
-
     if (services.includes("com.google.android.googlequicksearchbox")) {
       return "com.google.android.googlequicksearchbox";
+    }
+
+    if (services.includes("com.google.android.as")) {
+      return "com.google.android.as";
     }
 
     return services[0];
   } catch {
     return undefined;
+  }
+}
+
+async function resolveRecognitionLocale(
+  requestedLocale: string,
+  androidRecognitionServicePackage?: string
+) {
+  const normalizedRequested = requestedLocale.toLowerCase();
+  const requestedLanguage = normalizedRequested.split("-")[0];
+  const deviceLocale =
+    Intl.DateTimeFormat().resolvedOptions().locale?.replace("_", "-") ?? requestedLocale;
+  const normalizedDeviceLocale = deviceLocale.toLowerCase();
+  const deviceLanguage = normalizedDeviceLocale.split("-")[0];
+
+  try {
+    const localeResult = await ExpoSpeechRecognitionModule.getSupportedLocales({
+      androidRecognitionServicePackage,
+    });
+    const availableLocales = [
+      ...(localeResult.installedLocales ?? []),
+      ...(localeResult.locales ?? []),
+    ].filter(Boolean);
+
+    if (availableLocales.length === 0) {
+      return requestedLocale;
+    }
+
+    const uniqueLocales = Array.from(new Set(availableLocales));
+    const exactRequested = uniqueLocales.find(
+      (locale) => locale.toLowerCase() === normalizedRequested
+    );
+    if (exactRequested) {
+      return exactRequested;
+    }
+
+    const sameLanguageRequested = uniqueLocales.find(
+      (locale) => locale.toLowerCase().split("-")[0] === requestedLanguage
+    );
+    if (sameLanguageRequested) {
+      console.log(
+        `[voiceModule] Requested locale ${requestedLocale} unavailable. Falling back to ${sameLanguageRequested}.`
+      );
+      return sameLanguageRequested;
+    }
+
+    const exactDeviceLocale = uniqueLocales.find(
+      (locale) => locale.toLowerCase() === normalizedDeviceLocale
+    );
+    if (exactDeviceLocale) {
+      console.log(
+        `[voiceModule] Requested locale ${requestedLocale} unavailable. Falling back to device locale ${exactDeviceLocale}.`
+      );
+      return exactDeviceLocale;
+    }
+
+    const sameLanguageDevice = uniqueLocales.find(
+      (locale) => locale.toLowerCase().split("-")[0] === deviceLanguage
+    );
+    if (sameLanguageDevice) {
+      console.log(
+        `[voiceModule] Requested locale ${requestedLocale} unavailable. Falling back to device language locale ${sameLanguageDevice}.`
+      );
+      return sameLanguageDevice;
+    }
+
+    console.log(
+      `[voiceModule] Requested locale ${requestedLocale} unavailable. Falling back to first available locale ${uniqueLocales[0]}.`
+    );
+    return uniqueLocales[0];
+  } catch (error) {
+    console.log("[voiceModule] Could not resolve supported locales, using requested locale.", error);
+    return requestedLocale;
   }
 }
 
@@ -239,6 +311,10 @@ export async function safeVoiceStart(
     const androidRecognitionServicePackage =
       options.androidRecognitionServicePackage ??
       getPreferredAndroidRecognitionService();
+    const recognitionLocale = await resolveRecognitionLocale(
+      locale,
+      androidRecognitionServicePackage
+    );
 
     console.log("[voiceModule] Starting speech recognition engine");
     voiceEngineState.isStarting = true;
@@ -246,15 +322,28 @@ export async function safeVoiceStart(
     voiceEngineState.activeMode = mode;
     voiceEngineState.lastErrorKind = null;
 
-    ExpoSpeechRecognitionModule.start({
-      lang: locale,
+    const mergedOptions: ExpoSpeechRecognitionOptions = {
       interimResults: true,
       continuous: true,
       maxAlternatives: 5,
       addsPunctuation: false,
       androidRecognitionServicePackage,
+      requiresOnDeviceRecognition: false,
+      androidIntentOptions:
+        Platform.OS === "android"
+          ? {
+              EXTRA_LANGUAGE_MODEL: "web_search",
+              ...(options.androidIntentOptions ?? {}),
+            }
+          : options.androidIntentOptions,
       ...options,
-    });
+    };
+
+    if (Platform.OS !== "android" || recognitionLocale) {
+      mergedOptions.lang = recognitionLocale;
+    }
+
+    ExpoSpeechRecognitionModule.start(mergedOptions);
     return {
       ok: true,
     };

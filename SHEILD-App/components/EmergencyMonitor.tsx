@@ -55,6 +55,7 @@ const MAX_VOICE_RESTART_ATTEMPTS = 6;
 const DEFAULT_LOW_RISK_KEYWORDS = ["call me", "come later", "emergency"];
 const DEFAULT_HIGH_RISK_KEYWORDS = ["help", "danger", "save me", "help help"];
 const AI_CLASSIFICATION_POPUP_MS = 1800;
+const KEYWORD_TRIGGER_ONLY_MODE = true;
 
 const Device = { osBuildId: "mock-device-id" };
 const ReactNativeForegroundService = {
@@ -73,7 +74,7 @@ export default function EmergencyMonitor() {
     // Refs to avoid dependency loops
     const keywordsRef = useRef<{ low: string[], high: string[] }>({ low: [], high: [] });
     const listeningRef = useRef(false);
-    const volumeHistory = useRef<number[]>([]);
+    const volumeHistory = useRef<Array<{ time: number; direction: 'up' | 'down' }>>([]);
     const listeningTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const voiceRestartTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const voiceRestartAttemptsRef = useRef(0);
@@ -129,6 +130,9 @@ export default function EmergencyMonitor() {
     const backgroundServiceRef = useRef<boolean>(false);
     const appStateRef = useRef<AppStateStatus>('active');
     const lastVolumePressRef = useRef<number[]>([]);
+    const volumeTriggerEnabledRef = useRef(false);
+    const lastKnownVolumeRef = useRef<number | null>(null);
+    const isRecenteringVolumeRef = useRef(false);
 
 
     // Camera recording
@@ -185,6 +189,38 @@ export default function EmergencyMonitor() {
         console.log('Keywords loaded:', keywordsRef.current);
     }, []);
 
+    const refreshVolumeTriggerState = useCallback(async () => {
+        try {
+            const enabled = await AsyncStorage.getItem("VOLUME_TRIGGER_ENABLED");
+            volumeTriggerEnabledRef.current = enabled === "true";
+        } catch (error) {
+            console.log("Failed to read volume trigger setting:", error);
+            volumeTriggerEnabledRef.current = false;
+        }
+    }, []);
+
+    const recenterVolumeForHardwareTrigger = useCallback(async () => {
+        if (isRecenteringVolumeRef.current) {
+            return;
+        }
+
+        isRecenteringVolumeRef.current = true;
+        try {
+            await VolumeManager.setVolume(0.5, {
+                showUI: false,
+                playSound: false,
+                type: 'music',
+            });
+            lastKnownVolumeRef.current = 0.5;
+        } catch (error) {
+            console.log('Failed to recenter volume for hardware trigger:', error);
+        } finally {
+            setTimeout(() => {
+                isRecenteringVolumeRef.current = false;
+            }, 180);
+        }
+    }, []);
+
     const ensureKeywordFallbacks = useCallback(() => {
         const lowList =
             keywordsRef.current.low.length > 0 ? keywordsRef.current.low : DEFAULT_LOW_RISK_KEYWORDS;
@@ -223,6 +259,11 @@ export default function EmergencyMonitor() {
     const processAbnormalMovementDetection = useCallback(async (
         analysis: RiskAnalysis
     ) => {
+        if (KEYWORD_TRIGGER_ONLY_MODE) {
+            console.log('Keyword trigger only mode enabled. Ignoring abnormal movement detection trigger.');
+            return;
+        }
+
         const assessment = classifyAbnormalMovement(analysis);
         if (assessment.classification === 'NONE') {
             return;
@@ -371,6 +412,13 @@ export default function EmergencyMonitor() {
 
 
     const startGuardianService = async () => {
+        if (KEYWORD_TRIGGER_ONLY_MODE) {
+            await GuardianStateService.disableGuardianState();
+            setIsGuardianEnabled(false);
+            setGuardianStatus('PASSIVE');
+            return;
+        }
+
         await GuardianStateService.ensureBackgroundGuardianForLoggedInUser();
         setIsGuardianEnabled(true);
         setGuardianStatus(aiRiskEngine.isAnalysisActive() ? 'ACTIVE' : 'PASSIVE');
@@ -383,7 +431,22 @@ export default function EmergencyMonitor() {
     };
 
     useEffect(() => {
+        refreshVolumeTriggerState().catch(() => {});
+        VolumeManager.getVolume()
+            .then(({ volume }) => {
+                lastKnownVolumeRef.current = typeof volume === 'number' ? volume : null;
+            })
+            .catch((error) => {
+                console.log('Failed to read initial system volume:', error);
+            });
+
         const loadGuardianState = async () => {
+            if (KEYWORD_TRIGGER_ONLY_MODE) {
+                setIsGuardianEnabled(false);
+                setGuardianStatus('PASSIVE');
+                return;
+            }
+
             const enabled = await GuardianStateService.ensureBackgroundGuardianForLoggedInUser();
             if (enabled) {
                 setIsGuardianEnabled(true);
@@ -392,17 +455,26 @@ export default function EmergencyMonitor() {
         };
         loadGuardianState();
 
+        let autoSub: { remove: () => void } | null = null;
+        let riskSub: { remove: () => void } | null = null;
+        let toggleSub: { remove: () => void } | null = null;
+        let volumeTriggerSub: { remove: () => void } | null = null;
+        let aiRiskSub: { remove: () => void } | null = null;
+        let forceAiSub: { remove: () => void } | null = null;
+        let movementUnsubscribe: (() => void) | undefined;
+
         // 1. Register Background Task
-        registerGuardianTask();
+        if (!KEYWORD_TRIGGER_ONLY_MODE) {
+            registerGuardianTask();
 
         // 2. Listen for Auto Triggers from Background
-        const autoSub = DeviceEventEmitter.addListener('AUTO_EMERGENCY_TRIGGER', (analysis: RiskAnalysis) => {
+        autoSub = DeviceEventEmitter.addListener('AUTO_EMERGENCY_TRIGGER', (analysis: RiskAnalysis) => {
             console.log('⚡ Background Guardian triggered Emergency!');
             triggeredKeywordRef.current = analysis.triggers.join(', ');
             handleHighRisk();
         });
 
-        const riskSub = DeviceEventEmitter.addListener('AI_RISK_DETECTED', (analysis: RiskAnalysis) => {
+        riskSub = DeviceEventEmitter.addListener('AI_RISK_DETECTED', (analysis: RiskAnalysis) => {
             setAiRiskLevel(analysis.riskLevel);
             setAiConfidence(analysis.confidence);
             setAiRiskTriggers(analysis.triggers);
@@ -418,7 +490,7 @@ export default function EmergencyMonitor() {
         });
 
         // 3. Status Toggle Change (from Dashboard)
-        const toggleSub = DeviceEventEmitter.addListener('STATUS_TOGGLE_CHANGED', async () => {
+        toggleSub = DeviceEventEmitter.addListener('STATUS_TOGGLE_CHANGED', async () => {
              const sensorStatus = await AsyncStorage.getItem('SENSORS_ENABLED');
              if (sensorStatus === 'true') {
                  setIsGuardianEnabled(true);
@@ -429,11 +501,8 @@ export default function EmergencyMonitor() {
              }
         });
 
-        setup();
-        const cancelSub = DeviceEventEmitter.addListener("EMERGENCY_LISTENING_CANCEL", () => stopListening());
-        
         // Listen for AI risk events from background task
-        const aiRiskSub = DeviceEventEmitter.addListener("AI_RISK_DETECTED", (analysis) => {
+        aiRiskSub = DeviceEventEmitter.addListener("AI_RISK_DETECTED", (analysis) => {
             if (isEmergencyActive) return;
             console.log('📡 Received Background AI Risk:', analysis.riskLevel);
             if (analysis.riskLevel === 'HIGH') {
@@ -443,7 +512,7 @@ export default function EmergencyMonitor() {
             }
         });
 
-        const forceAiSub = DeviceEventEmitter.addListener("FORCE_AI_EMERGENCY", () => {
+        forceAiSub = DeviceEventEmitter.addListener("FORCE_AI_EMERGENCY", () => {
             console.log('🚨 Manually Forced AI Emergency');
             processAbnormalMovementDetection({
                 riskLevel: 'HIGH',
@@ -460,7 +529,7 @@ export default function EmergencyMonitor() {
             });
         });
 
-        const movementUnsubscribe = aiRiskEngine.subscribeMovement((movementEvent) => {
+        movementUnsubscribe = aiRiskEngine.subscribeMovement((movementEvent) => {
             if (showHighWarning || showLowWarning || isEmergencyActive) {
                 return;
             }
@@ -468,6 +537,13 @@ export default function EmergencyMonitor() {
             startAiAnalysisSequence(movementEvent).catch((error) => {
                 console.log("AI analysis sequence error:", error);
             });
+        });
+        }
+
+        setup();
+        const cancelSub = DeviceEventEmitter.addListener("EMERGENCY_LISTENING_CANCEL", () => stopListening());
+        volumeTriggerSub = DeviceEventEmitter.addListener("STATUS_TOGGLE_CHANGED", () => {
+            refreshVolumeTriggerState().catch(() => {});
         });
 
         // App State Listener for Background/Foreground transitions
@@ -479,12 +555,13 @@ export default function EmergencyMonitor() {
         });
 
         return () => {
-            autoSub.remove();
-            riskSub.remove();
+            autoSub?.remove();
+            riskSub?.remove();
             cancelSub.remove();
-            toggleSub.remove();
-            aiRiskSub.remove();
-            forceAiSub.remove();
+            toggleSub?.remove();
+            volumeTriggerSub?.remove();
+            aiRiskSub?.remove();
+            forceAiSub?.remove();
             movementUnsubscribe?.();
             appStateSubscription.remove();
             volumeListener.remove();
@@ -496,7 +573,7 @@ export default function EmergencyMonitor() {
                 movementPopupTimeoutRef.current = null;
             }
         };
-    }, []);
+    }, [refreshVolumeTriggerState]);
 
     const clearAiAnalysisProgress = useCallback(() => {
         if (analysisProgressIntervalRef.current) {
@@ -604,10 +681,13 @@ export default function EmergencyMonitor() {
         setUserId(id);
         if (id) {
             await fetchKeywords(id);
-            await GuardianStateService.ensureBackgroundGuardianForLoggedInUser();
-        }
+            if (!KEYWORD_TRIGGER_ONLY_MODE) {
+                await GuardianStateService.ensureBackgroundGuardianForLoggedInUser();
+            }
+            }
 
-        // Check for pending emergency from background monitoring
+        if (!KEYWORD_TRIGGER_ONLY_MODE) {
+            // Check for pending emergency from background monitoring
         try {
             const pendingEmergency = await AsyncStorage.getItem('pendingEmergency');
             if (pendingEmergency) {
@@ -625,6 +705,8 @@ export default function EmergencyMonitor() {
             console.log('Error checking pending emergency in setup:', e);
         }
 
+        }
+
         // Voice listeners
         if (isVoiceModuleAvailable()) {
             bindVoiceRuntimeHandlers();
@@ -634,17 +716,25 @@ export default function EmergencyMonitor() {
         
         // Initiation
         // Refresh toggles
-        const micEnabled = await AsyncStorage.getItem("MIC_ENABLED");
-        const snsEnabled = await AsyncStorage.getItem("SENSORS_ENABLED");
+        await AsyncStorage.getItem("MIC_ENABLED");
 
-        if (snsEnabled === "false") {
+        if (KEYWORD_TRIGGER_ONLY_MODE) {
             aiRiskEngine.stopMonitoring();
+            await aiRiskEngine.stopFullAnalysis();
             await GuardianStateService.saveMonitoringStatus('OFF');
+            setIsGuardianEnabled(false);
+            setGuardianStatus('PASSIVE');
         } else {
-            startAiRiskDetection();
-            await GuardianStateService.saveMonitoringStatus(
-                aiRiskEngine.isAnalysisActive() ? 'ACTIVE' : 'PASSIVE'
-            );
+            const snsEnabled = await AsyncStorage.getItem("SENSORS_ENABLED");
+            if (snsEnabled === "false") {
+                aiRiskEngine.stopMonitoring();
+                await GuardianStateService.saveMonitoringStatus('OFF');
+            } else {
+                startAiRiskDetection();
+                await GuardianStateService.saveMonitoringStatus(
+                    aiRiskEngine.isAnalysisActive() ? 'ACTIVE' : 'PASSIVE'
+                );
+            }
         }
 
         checkBatteryOptimization();
@@ -672,6 +762,7 @@ export default function EmergencyMonitor() {
             backgroundServiceRef.current = false;
             
             // Check for pending emergency from background
+            if (!KEYWORD_TRIGGER_ONLY_MODE) {
             try {
                 const pendingEmergency = await AsyncStorage.getItem('pendingEmergency');
                 if (pendingEmergency) {
@@ -685,6 +776,7 @@ export default function EmergencyMonitor() {
                 }
             } catch (e) {
                 console.log('Error checking pending emergency:', e);
+            }
             }
         } else if (nextAppState === 'background' || nextAppState === 'inactive') {
             // App has gone to background
@@ -1268,15 +1360,18 @@ export default function EmergencyMonitor() {
         
         console.log("✅ ALL emergency processes terminated successfully");
         
-        // After 5s, re-enable AI monitoring in passive mode
-        setTimeout(async () => {
+        if (!KEYWORD_TRIGGER_ONLY_MODE) {
+            setTimeout(async () => {
+                isCancelledRef.current = false;
+                const snsEnabled = await AsyncStorage.getItem("SENSORS_ENABLED");
+                if (snsEnabled !== "false") {
+                    console.log("🤖 Auto-restarting AI Risk Engine after safe confirmation...");
+                    startAiRiskDetection();
+                }
+            }, 5000);
+        } else {
             isCancelledRef.current = false;
-            const snsEnabled = await AsyncStorage.getItem("SENSORS_ENABLED");
-            if (snsEnabled !== "false") {
-                console.log("🤖 Auto-restarting AI Risk Engine after safe confirmation...");
-                startAiRiskDetection();
-            }
-        }, 5000);
+        }
     };
 
     const cancelHighRiskAlert = async () => {
@@ -1295,15 +1390,18 @@ export default function EmergencyMonitor() {
         setAiRiskLevel('NONE');
         await cancelAiDetection();
 
-        // After 5s, re-enable AI monitoring in passive mode
-        setTimeout(async () => {
+        if (!KEYWORD_TRIGGER_ONLY_MODE) {
+            setTimeout(async () => {
+                isCancelledRef.current = false;
+                const snsEnabled = await AsyncStorage.getItem("SENSORS_ENABLED");
+                if (snsEnabled !== "false") {
+                    console.log("🤖 Auto-restarting AI Risk Engine after cancellation...");
+                    startAiRiskDetection();
+                }
+            }, 5000);
+        } else {
             isCancelledRef.current = false;
-            const snsEnabled = await AsyncStorage.getItem("SENSORS_ENABLED");
-            if (snsEnabled !== "false") {
-                console.log("🤖 Auto-restarting AI Risk Engine after cancellation...");
-                startAiRiskDetection();
-            }
-        }, 5000);
+        }
     };
 
     // ==================== AI RISK DETECTION FUNCTIONS ====================
@@ -1313,8 +1411,63 @@ export default function EmergencyMonitor() {
      * movementMagnitude = sqrt(x² + y² + z²)
      */
     const handleVolumeButtonPress = useCallback((event: any) => {
+        if (!volumeTriggerEnabledRef.current) {
+            return;
+        }
+
+        if (KEYWORD_TRIGGER_ONLY_MODE && appStateRef.current !== 'active') {
+            console.log('Ignoring volume trigger while app is not in foreground.');
+            return;
+        }
+
+        const nextVolume = typeof event?.volume === 'number' ? event.volume : null;
+        if (nextVolume === null) {
+            return;
+        }
+
+        if (isRecenteringVolumeRef.current) {
+            lastKnownVolumeRef.current = nextVolume;
+            return;
+        }
+
+        const previousVolume = lastKnownVolumeRef.current;
+        lastKnownVolumeRef.current = nextVolume;
+
+        if (previousVolume === null) {
+            return;
+        }
+
+        const delta = nextVolume - previousVolume;
+        if (Math.abs(delta) < 0.01) {
+            return;
+        }
+
         const now = Date.now();
         lastVolumePressRef.current.push(now);
+        lastVolumePressRef.current = lastVolumePressRef.current.filter((t) => now - t < 3000);
+
+        const direction: 'up' | 'down' = delta > 0 ? 'up' : 'down';
+        volumeHistory.current.push({ time: now, direction });
+        volumeHistory.current = volumeHistory.current.filter((entry) => now - entry.time < 3000);
+
+        const latestFour = volumeHistory.current
+            .slice(-4)
+            .map((entry) => entry.direction)
+            .join('-');
+
+        console.log('Volume button pattern:', latestFour || direction);
+
+        if (latestFour === 'up-up-down-down' && !listeningRef.current) {
+            lastVolumePressRef.current = [];
+            volumeHistory.current = [];
+            console.log('VOLUME BUTTON TRIGGER - EMERGENCY ACTIVATED');
+            activateEmergencyListening().catch((error) => {
+                console.log('Volume trigger activation error:', error);
+            });
+        }
+
+        recenterVolumeForHardwareTrigger().catch(() => {});
+        return;
         
         // Keep only last 3 seconds of presses
         lastVolumePressRef.current = lastVolumePressRef.current.filter(t => now - t < 3000);
@@ -1327,7 +1480,7 @@ export default function EmergencyMonitor() {
             console.log('🔥🔥🔥 VOLUME BUTTON TRIGGER - EMERGENCY ACTIVATED');
             activateEmergencyListening();
         }
-    }, []);
+    }, [recenterVolumeForHardwareTrigger]);
     
     const performRiskAnalysis = async (): Promise<RiskAnalysis> => {
         return await aiRiskEngine.performRiskAnalysis();
@@ -1362,6 +1515,7 @@ export default function EmergencyMonitor() {
             clearInterval(aiAnalysisIntervalRef.current);
             aiAnalysisIntervalRef.current = null;
         }
+        aiRiskEngine.stopMonitoring();
         setAiRiskLevel('NONE');
         setAiConfidence(0);
         setAiRiskTriggers([]);

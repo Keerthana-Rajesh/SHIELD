@@ -14,11 +14,16 @@ const analyzeWithAI = async (text: string) => {
             body: JSON.stringify({ text }),
         });
 
+        if (!res.ok) {
+            console.log("AI analyze request failed with status:", res.status);
+            return null;
+        }
+
         const data = await res.json();
-        return data.risk;
+        return data?.risk ?? null;
     } catch (err) {
         console.log("AI error:", err);
-        return "LOW";
+        return null;
     }
 };
 
@@ -427,14 +432,14 @@ class AiRiskEngine {
                 return finalAnalysis;
             }
 
-            const safeAnalysis: RiskAnalysis = {
+            const finalAnalysis: RiskAnalysis = {
                 ...analysis,
-                riskLevel: "NONE",
-                confidence: 0
+                // Preserve local heuristics when AI is unavailable or returns LOW.
+                riskLevel: riskLevel === "HIGH" ? "LOW" : riskLevel,
             };
 
-            this.notifySubscribers(safeAnalysis);
-            return safeAnalysis;
+            this.notifySubscribers(finalAnalysis);
+            return finalAnalysis;
         }
 
         this.notifySubscribers(analysis);
