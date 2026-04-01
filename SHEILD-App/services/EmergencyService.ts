@@ -1,4 +1,53 @@
 import BASE_URL from "../config/api";
+import * as SMS from "expo-sms";
+import { NativeModules, PermissionsAndroid, Platform } from "react-native";
+
+type TrustedContact = {
+    trusted_id?: number | string;
+    trusted_name?: string;
+    trusted_no?: string;
+    email?: string;
+    user_id?: string;
+    latitude?: string | number;
+    longitude?: string | number;
+};
+
+const { AutoSmsModule } = NativeModules as {
+    AutoSmsModule?: {
+        sendSms: (phoneNumber: string, message: string) => Promise<boolean>;
+    };
+};
+
+function normalizeLocationUrl(locationUrl: string) {
+    if (!locationUrl || locationUrl === "Location unavailable" || locationUrl === "Location Disabled") {
+        return "Location unavailable";
+    }
+
+    if (locationUrl.startsWith("http://") || locationUrl.startsWith("https://")) {
+        return locationUrl;
+    }
+
+    const coords = locationUrl.split(",").map((part) => part.trim());
+    if (coords.length === 2 && coords[0] && coords[1]) {
+        return `https://www.google.com/maps?q=${coords[0]},${coords[1]}`;
+    }
+
+    return locationUrl;
+}
+
+function extractCoordinates(locationUrl: string) {
+    const normalized = normalizeLocationUrl(locationUrl);
+    const mapMatch = normalized.match(/q=([-.\d]+),([-.\d]+)/i);
+
+    if (!mapMatch) {
+        return { latitude: null, longitude: null };
+    }
+
+    return {
+        latitude: Number(mapMatch[1]),
+        longitude: Number(mapMatch[2]),
+    };
+}
 
 export const EmergencyService = {
     // 3. Emergency Incident Creation
@@ -71,6 +120,129 @@ export const EmergencyService = {
             });
         } catch (e) {
             console.error("Error logging alert:", e);
+        }
+    },
+
+    async storeEvidence(emergencyId: number, evidenceType: 'video' | 'audio') {
+        try {
+            await fetch(`${BASE_URL}/emergency/evidence`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ emergency_id: emergencyId, evidence_type: evidenceType }),
+            });
+        } catch (e) {
+            console.error("Error storing evidence:", e);
+        }
+    },
+
+    async getTrustedContacts(userId: string) {
+        try {
+            const response = await fetch(`${BASE_URL}/getTrustedContacts/${userId}`);
+            if (response.ok) {
+                const contacts = await response.json();
+                if (Array.isArray(contacts) && contacts.length > 0) {
+                    return contacts as TrustedContact[];
+                }
+            }
+
+            return [] as TrustedContact[];
+        } catch (e) {
+            console.error("Error fetching trusted contacts:", e);
+            return [] as TrustedContact[];
+        }
+    },
+
+    async sendTrustedContactAlerts(params: {
+        userId: string;
+        locationUrl: string;
+        keyword: string | null;
+        riskLevel: "LOW" | "HIGH";
+        emergencyId?: number | null;
+        contacts?: TrustedContact[];
+    }) {
+        try {
+            const contacts = params.contacts ?? await this.getTrustedContacts(params.userId);
+            const numbers = contacts
+                .map((contact) => contact.trusted_no?.trim())
+                .filter((value): value is string => Boolean(value));
+
+            if (numbers.length === 0) {
+                return contacts;
+            }
+
+            const smsAvailable = await SMS.isAvailableAsync();
+            if (!smsAvailable) {
+                console.log("SMS is not available on this device.");
+                return contacts;
+            }
+
+            const liveLocation = normalizeLocationUrl(params.locationUrl);
+            const message = [
+                `SHEILD ${params.riskLevel} ALERT`,
+                `Trigger: ${params.keyword || "Emergency"}`,
+                `Live Location: ${liveLocation}`,
+            ].join("\n");
+
+            let sent = false;
+            if (Platform.OS === "android" && AutoSmsModule) {
+                const granted = await PermissionsAndroid.request(
+                    PermissionsAndroid.PERMISSIONS.SEND_SMS
+                );
+
+                if (granted === PermissionsAndroid.RESULTS.GRANTED) {
+                    for (const number of numbers) {
+                        await AutoSmsModule.sendSms(number, message);
+                    }
+                    sent = true;
+                } else {
+                    console.log("SEND_SMS permission denied.");
+                }
+            } else {
+                const result = await SMS.sendSMSAsync(numbers, message);
+                sent = result.result !== "cancelled";
+            }
+
+            if (params.emergencyId && sent) {
+                await this.logAlert(params.emergencyId, "sms");
+            }
+
+            return contacts;
+        } catch (e) {
+            console.error("Error sending trusted contact alerts:", e);
+            return params.contacts ?? [];
+        }
+    },
+
+    async sendSosEmailAlert(params: {
+        email: string | null;
+        locationUrl: string;
+        keyword: string | null;
+        riskLevel: "LOW" | "HIGH";
+        mediaUrls?: string[];
+    }) {
+        if (!params.email) {
+            return { success: false, message: "Missing user email" };
+        }
+
+        try {
+            const { latitude, longitude } = extractCoordinates(params.locationUrl);
+            const response = await fetch(`${BASE_URL}/send-sos`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    email: params.email,
+                    latitude,
+                    longitude,
+                    keyword: params.keyword,
+                    risk_level: params.riskLevel,
+                    media_urls: params.mediaUrls ?? [],
+                }),
+            });
+
+            return await response.json();
+        } catch (e) {
+            console.error("Error sending SOS email alert:", e);
+            return { success: false, message: "Failed to send SOS email alert" };
         }
     },
 
@@ -158,3 +330,5 @@ export const FakeCallService = {
         }
     }
 };
+
+export type { TrustedContact };

@@ -15,7 +15,6 @@ import * as Location from "expo-location";
 import { Linking, Platform, PermissionsAndroid } from "react-native";
 import haversine from 'haversine';
 import { addVolumeListener } from "react-native-volume-manager";
-import call from 'react-native-phone-call';
 import { fetchKeywords } from "../services/keywordService";
 import { DeviceEventEmitter } from "react-native";
 import EmergencyOverlay from "../components/EmergencyOverlay";
@@ -376,6 +375,22 @@ export default function Dashboard() {
       if (startRes.success) {
           await EmergencyService.logAlert(startRes.emergency_id, 'email');
           await ActivityService.logActivity("SOS_TRIGGERED_MANUAL", startRes.emergency_id);
+          await EmergencyService.sendTrustedContactAlerts({
+            userId,
+            locationUrl: mapLink || "Location unavailable",
+            keyword: "MANUAL SOS",
+            riskLevel: "HIGH",
+            emergencyId: startRes.emergency_id,
+            contacts,
+          });
+      } else {
+          await EmergencyService.sendTrustedContactAlerts({
+            userId,
+            locationUrl: mapLink || "Location unavailable",
+            keyword: "MANUAL SOS",
+            riskLevel: "HIGH",
+            contacts,
+          });
       }
 
       await fetch(`${BASE_URL}/send-sos`, {

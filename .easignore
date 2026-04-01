@@ -1,0 +1,35 @@
+# Dependencies and local tooling caches
+.git/
+.idea/
+.expo/
+.vscode/
+node_modules/
+**/node_modules/
+**/.expo/
+**/.vscode/
+
+# Build outputs and generated native artifacts
+dist/
+temp_native/
+**/dist/
+**/temp_native/
+**/android/.gradle/
+**/android/build/
+**/android/app/build/
+**/android/app/.cxx/
+
+# Local logs and diagnostic dumps
+*.log
+*.txt
+expo_*.log
+*build*.json
+initial_failure.json
+latest*.json
+last_builds.json
+list.json
+sha1*.txt
+RKStorage_phone.*
+
+# Non-app project folders and large local-only artifacts
+mysql-backend/
+crash.txt

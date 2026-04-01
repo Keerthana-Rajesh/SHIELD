@@ -116,6 +116,16 @@ export const abnormalMovementEmergencyService = {
       });
     }
 
+    if (userId) {
+      await EmergencyService.sendTrustedContactAlerts({
+        userId,
+        locationUrl,
+        keyword: assessment.message,
+        riskLevel: "LOW",
+        emergencyId,
+      });
+    }
+
     return { duplicate: false, emergencyId, locationUrl };
   },
 
@@ -159,6 +169,16 @@ export const abnormalMovementEmergencyService = {
         riskLevel: "HIGH",
         latitude,
         longitude,
+      });
+    }
+
+    if (userId) {
+      await EmergencyService.sendTrustedContactAlerts({
+        userId,
+        locationUrl,
+        keyword: assessment.message,
+        riskLevel: "HIGH",
+        emergencyId,
       });
     }
 

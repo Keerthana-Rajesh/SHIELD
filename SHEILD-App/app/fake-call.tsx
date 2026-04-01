@@ -127,11 +127,6 @@ export default function FakeCallSetup() {
     })();
   }, []);
 
-  // Early return after hooks
-  if (!directory) {
-    return null;
-  }
-
   const newPath: string = directory + `voice-${Date.now()}.m4a`;
 
   const newVoice = {
@@ -519,6 +514,10 @@ export default function FakeCallSetup() {
     setCalling(false);
     setCountdown(null);
   };
+
+  if (!directory) {
+    return null;
+  }
 
 
   return (

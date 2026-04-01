@@ -9,6 +9,7 @@ const MapComponent = forwardRef<any, any>((props, ref) => {
     </View>
   );
 });
+MapComponent.displayName = "MapComponent";
 
 export const Marker = () => null;
 export default MapComponent;

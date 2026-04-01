@@ -5,12 +5,13 @@ import haversine from 'haversine';
 import BASE_URL from '../config/api';
 
 interface EmergencyContact {
-    trusted_id: string;
+    trusted_id?: string | number;
     trusted_name: string;
     trusted_no: string;
     trusted_email?: string;
-    latitude?: number;
-    longitude?: number;
+    email?: string;
+    latitude?: number | string;
+    longitude?: number | string;
 }
 
 interface LocationCoords {
@@ -47,14 +48,17 @@ class ForegroundCallService {
 
     private calculateDistance(contact: EmergencyContact): number {
         // If contact has no GPS coordinates, return a default distance (will be sorted last)
-        if (!this.userLocation || !contact.latitude || !contact.longitude) {
+        const latitude = typeof contact.latitude === 'string' ? Number(contact.latitude) : contact.latitude;
+        const longitude = typeof contact.longitude === 'string' ? Number(contact.longitude) : contact.longitude;
+
+        if (!this.userLocation || !latitude || !longitude) {
             console.log(`⚠️ No GPS data for ${contact.trusted_name}, using default distance`);
             return 9999; // Large distance so contacts with GPS are prioritized
         }
 
         const contactLocation: LocationCoords = {
-            latitude: contact.latitude,
-            longitude: contact.longitude
+            latitude,
+            longitude
         };
 
         const distance = haversine(this.userLocation, contactLocation, { unit: 'mile' });
@@ -229,6 +233,52 @@ class ForegroundCallService {
 
         // Start calling the first (nearest) contact
         await callNextContact();
+    }
+
+    public async callNearestEmergencyContact(
+        contacts: EmergencyContact[],
+        onCallUpdate?: (contactName: string, timeRemaining: number) => void
+    ): Promise<EmergencyContact | null> {
+        if (this.isCallActive) {
+            console.log('⚠️ A call flow is already active');
+            return null;
+        }
+
+        const sortedContacts = this.sortContactsByDistance(contacts);
+        const contact = sortedContacts[0];
+
+        if (!contact) {
+            console.log('⚠️ No callable emergency contacts available');
+            return null;
+        }
+
+        this.isCallActive = true;
+        this.currentCallIndex = 0;
+
+        try {
+            let timeRemaining = 15;
+            onCallUpdate?.(contact.trusted_name, timeRemaining);
+
+            const countdownInterval = setInterval(() => {
+                if (!this.isCallActive) {
+                    clearInterval(countdownInterval);
+                    return;
+                }
+
+                timeRemaining -= 1;
+                onCallUpdate?.(contact.trusted_name, Math.max(timeRemaining, 0));
+
+                if (timeRemaining <= 0) {
+                    clearInterval(countdownInterval);
+                }
+            }, 1000);
+
+            await this.triggerCall(contact.trusted_no);
+            clearInterval(countdownInterval);
+            return contact;
+        } finally {
+            this.isCallActive = false;
+        }
     }
 
     public stopCallRotation(): void {

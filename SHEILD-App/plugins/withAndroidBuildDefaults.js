@@ -32,6 +32,7 @@ module.exports = function withAndroidBuildDefaults(config) {
         "reactNativeArchitectures",
         "arm64-v8a"
       );
+      contents = upsertGradleProperty(contents, "newArchEnabled", "true");
       contents = upsertGradleProperty(contents, "android.useAndroidX", "true");
       contents = upsertGradleProperty(contents, "android.enableJetifier", "true");
 

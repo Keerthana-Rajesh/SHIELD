@@ -32,6 +32,10 @@ router.post("/notification", activityController.logNotification);
 router.post("/fake-call", specialFeaturesController.triggerFakeCall);
 router.post("/access-link", specialFeaturesController.createAccessLink);
 router.get("/generate-qr/:userId", specialFeaturesController.generateQrLink);
+router.get("/qr-emergency", specialFeaturesController.renderQrEmergencyPage);
+router.get("/qr_emergency", specialFeaturesController.renderQrEmergencyPage);
+router.get("/qr emergency", specialFeaturesController.renderQrEmergencyPage);
 router.post("/qr/trigger", specialFeaturesController.triggerQR);
+router.post("/qr/trigger-public", specialFeaturesController.triggerQR);
 
 module.exports = router;

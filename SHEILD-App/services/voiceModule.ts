@@ -332,7 +332,10 @@ export async function safeVoiceStart(
       androidIntentOptions:
         Platform.OS === "android"
           ? {
-              EXTRA_LANGUAGE_MODEL: "web_search",
+              EXTRA_LANGUAGE_MODEL: "free_form",
+              EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS: 15000,
+              EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS: 5000,
+              EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS: 5000,
               ...(options.androidIntentOptions ?? {}),
             }
           : options.androidIntentOptions,

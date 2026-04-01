@@ -39,7 +39,7 @@ export default function About() {
                         AI Powered Personal Safety
                     </Text>
                     <Text style={styles.quote}>
-                        "Protecting you silently. Acting instantly."
+                        &quot;Protecting you silently. Acting instantly.&quot;
                     </Text>
                 </View>
 
@@ -51,8 +51,8 @@ export default function About() {
                     </View>
 
                     <Text style={styles.cardText}>
-                        SHIELD's advanced monitoring, instant alerts,
-                        and real-time location sharing ensure you're never
+                        SHIELD&apos;s advanced monitoring, instant alerts,
+                        and real-time location sharing ensure you&apos;re never
                         alone. Featuring hardware triggers and AI-driven
                         analysis for proactive safety, SHIELD listens
                         for distress signals and responds in milliseconds.

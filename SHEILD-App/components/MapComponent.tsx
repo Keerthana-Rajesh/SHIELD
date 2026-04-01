@@ -30,6 +30,7 @@ const MapComponent = forwardRef<MapView, MapComponentProps>((props, ref) => {
     </MapView>
   );
 });
+MapComponent.displayName = "MapComponent";
 
 export { Marker };
 export default MapComponent;

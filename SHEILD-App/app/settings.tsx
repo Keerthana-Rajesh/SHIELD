@@ -9,8 +9,8 @@ import {
 } from "react-native";
 import Slider from "@react-native-community/slider";
 import { MaterialIcons } from "@expo/vector-icons";
-import { useState, useEffect } from "react";
-import { useRouter } from "expo-router";
+import { useState, useEffect, useCallback } from "react";
+import { useFocusEffect, useRouter } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { DeviceEventEmitter } from "react-native";
 import { ProfileService } from "../services/EmergencyService";
@@ -31,29 +31,41 @@ export default function Settings() {
         .split(",")
         .map(word => word.trim().toLowerCase());
 
-    const handleVolumeToggle = async (val: boolean) => {
-        setVolumeTrigger(val);
-        const id = await AsyncStorage.getItem("userId");
-        if (id) {
-            await ProfileService.saveHardwareTrigger(id, val);
+    const loadSettings = useCallback(async () => {
+        const storedVolumeTrigger = await AsyncStorage.getItem("VOLUME_TRIGGER_ENABLED");
+        if (storedVolumeTrigger !== null) {
+            setVolumeTrigger(storedVolumeTrigger === "true");
         }
-        // Also save to AsyncStorage for legacy local logic
+    }, []);
+
+    const handleVolumeToggle = async (val: boolean) => {
         await AsyncStorage.setItem("VOLUME_TRIGGER_ENABLED", val.toString());
+        setVolumeTrigger(val);
         DeviceEventEmitter.emit("STATUS_TOGGLE_CHANGED");
+
+        try {
+            const id = await AsyncStorage.getItem("userId");
+            if (id) {
+                await ProfileService.saveHardwareTrigger(id, val, "double_press");
+            }
+        } catch (error) {
+            console.log("Failed to sync volume trigger setting:", error);
+        }
     };
 
     useEffect(() => {
-        const loadSettings = async () => {
-            const storedVolumeTrigger = await AsyncStorage.getItem("VOLUME_TRIGGER_ENABLED");
-            if (storedVolumeTrigger !== null) {
-                setVolumeTrigger(storedVolumeTrigger === "true");
-            }
-        };
-
         loadSettings().catch((error) => {
             console.log("Failed to load settings:", error);
         });
-    }, []);
+    }, [loadSettings]);
+
+    useFocusEffect(
+        useCallback(() => {
+            loadSettings().catch((error) => {
+                console.log("Failed to refresh settings:", error);
+            });
+        }, [loadSettings])
+    );
 
 
     return (

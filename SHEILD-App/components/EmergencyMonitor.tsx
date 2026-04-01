@@ -24,7 +24,6 @@ import { ActivityService } from '../services/ActivityService';
 import { EmergencyService } from '../services/EmergencyService';
 import { GuardianServiceManager } from '../services/GuardianServiceManager';
 import { GuardianStateService } from '../services/GuardianStateService';
-import * as SMS from 'expo-sms';
 import { registerGuardianTask } from '../utils/GuardianTask';
 import { findMatchedKeyword } from '../services/keywordMatcher';
 import { classifyAbnormalMovement } from '../services/abnormalMovementClassifier';
@@ -66,6 +65,9 @@ const ReactNativeForegroundService = {
 
 export default function EmergencyMonitor() {
     const [isListening, setIsListening] = useState(false);
+    const [listeningCountdown, setListeningCountdown] = useState(15);
+    const [listeningStatusText, setListeningStatusText] = useState("Listening to the user's audio for emergency keywords.");
+    const [heardSpeechText, setHeardSpeechText] = useState("");
     const [userId, setUserId] = useState<string | null>(null);
     const [currentEmergencyId, setCurrentEmergencyId] = useState<number | null>(null);
     const [lowRiskKeywords, setLowRiskKeywords] = useState<string[]>([]);
@@ -76,7 +78,9 @@ export default function EmergencyMonitor() {
     const listeningRef = useRef(false);
     const volumeHistory = useRef<Array<{ time: number; direction: 'up' | 'down' }>>([]);
     const listeningTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const listeningCountdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const voiceRestartTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const listeningPopupCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const voiceRestartAttemptsRef = useRef(0);
     const movementPopupTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const cancelTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -133,6 +137,9 @@ export default function EmergencyMonitor() {
     const volumeTriggerEnabledRef = useRef(false);
     const lastKnownVolumeRef = useRef<number | null>(null);
     const isRecenteringVolumeRef = useRef(false);
+    const currentEmergencyIdRef = useRef<number | null>(null);
+    const lowRiskSequenceRef = useRef(false);
+    const highRiskSequenceRef = useRef(false);
 
 
     // Camera recording
@@ -193,9 +200,15 @@ export default function EmergencyMonitor() {
         try {
             const enabled = await AsyncStorage.getItem("VOLUME_TRIGGER_ENABLED");
             volumeTriggerEnabledRef.current = enabled === "true";
+            if (!volumeTriggerEnabledRef.current) {
+                lastVolumePressRef.current = [];
+                volumeHistory.current = [];
+            }
         } catch (error) {
             console.log("Failed to read volume trigger setting:", error);
             volumeTriggerEnabledRef.current = false;
+            lastVolumePressRef.current = [];
+            volumeHistory.current = [];
         }
     }, []);
 
@@ -255,6 +268,10 @@ export default function EmergencyMonitor() {
     const waitForClassificationPopup = useCallback(async () => {
         await new Promise((resolve) => setTimeout(resolve, AI_CLASSIFICATION_POPUP_MS));
     }, []);
+
+    useEffect(() => {
+        currentEmergencyIdRef.current = currentEmergencyId;
+    }, [currentEmergencyId]);
 
     const processAbnormalMovementDetection = useCallback(async (
         analysis: RiskAnalysis
@@ -333,11 +350,23 @@ export default function EmergencyMonitor() {
         }
     };
 
+    const clearListeningCountdown = () => {
+        if (listeningCountdownIntervalRef.current) {
+            clearInterval(listeningCountdownIntervalRef.current);
+            listeningCountdownIntervalRef.current = null;
+        }
+    };
+
+    const clearListeningPopupCloseTimer = () => {
+        if (listeningPopupCloseTimeoutRef.current) {
+            clearTimeout(listeningPopupCloseTimeoutRef.current);
+            listeningPopupCloseTimeoutRef.current = null;
+        }
+    };
+
     const isEmergencyListeningWindowActive = () => {
         return (
             listeningRef.current &&
-            appStateRef.current === 'active' &&
-            !backgroundServiceRef.current &&
             listeningWindowEndsAtRef.current !== null &&
             Date.now() < listeningWindowEndsAtRef.current
         );
@@ -467,17 +496,18 @@ export default function EmergencyMonitor() {
         if (!KEYWORD_TRIGGER_ONLY_MODE) {
             registerGuardianTask();
 
-        // 2. Listen for Auto Triggers from Background
-        autoSub = DeviceEventEmitter.addListener('AUTO_EMERGENCY_TRIGGER', (analysis: RiskAnalysis) => {
+            // 2. Listen for Auto Triggers from Background
+            autoSub = DeviceEventEmitter.addListener('AUTO_EMERGENCY_TRIGGER', (analysis: RiskAnalysis) => {
             console.log('⚡ Background Guardian triggered Emergency!');
             triggeredKeywordRef.current = analysis.triggers.join(', ');
             handleHighRisk();
         });
 
-        riskSub = DeviceEventEmitter.addListener('AI_RISK_DETECTED', (analysis: RiskAnalysis) => {
+            riskSub = DeviceEventEmitter.addListener('AI_RISK_DETECTED', (analysis: RiskAnalysis) => {
             setAiRiskLevel(analysis.riskLevel);
             setAiConfidence(analysis.confidence);
             setAiRiskTriggers(analysis.triggers);
+            luxRef.current = analysis.sensorData.light;
             GuardianStateService.saveAnalysis(
                 analysis,
                 analysis.riskLevel === 'NONE' ? 'PASSIVE' : undefined
@@ -489,22 +519,23 @@ export default function EmergencyMonitor() {
             else setGuardianStatus('PASSIVE');
         });
 
-        // 3. Status Toggle Change (from Dashboard)
-        toggleSub = DeviceEventEmitter.addListener('STATUS_TOGGLE_CHANGED', async () => {
-             const sensorStatus = await AsyncStorage.getItem('SENSORS_ENABLED');
-             if (sensorStatus === 'true') {
-                 setIsGuardianEnabled(true);
-                 startGuardianService();
-             } else {
-                 setIsGuardianEnabled(false);
-                 stopGuardianService();
-             }
-        });
+            // 3. Status Toggle Change (from Dashboard)
+            toggleSub = DeviceEventEmitter.addListener('STATUS_TOGGLE_CHANGED', async () => {
+                const sensorStatus = await AsyncStorage.getItem('SENSORS_ENABLED');
+                if (sensorStatus === 'true') {
+                    setIsGuardianEnabled(true);
+                    startGuardianService();
+                } else {
+                    setIsGuardianEnabled(false);
+                    stopGuardianService();
+                }
+            });
 
-        // Listen for AI risk events from background task
-        aiRiskSub = DeviceEventEmitter.addListener("AI_RISK_DETECTED", (analysis) => {
+            // Listen for AI risk events from background task
+            aiRiskSub = DeviceEventEmitter.addListener("AI_RISK_DETECTED", (analysis) => {
             if (isEmergencyActive) return;
             console.log('📡 Received Background AI Risk:', analysis.riskLevel);
+            luxRef.current = analysis.sensorData.light;
             if (analysis.riskLevel === 'HIGH') {
                 processAbnormalMovementDetection(analysis).catch((error) => {
                     console.log('Background abnormal movement handling error:', error);
@@ -512,7 +543,7 @@ export default function EmergencyMonitor() {
             }
         });
 
-        forceAiSub = DeviceEventEmitter.addListener("FORCE_AI_EMERGENCY", () => {
+            forceAiSub = DeviceEventEmitter.addListener("FORCE_AI_EMERGENCY", () => {
             console.log('🚨 Manually Forced AI Emergency');
             processAbnormalMovementDetection({
                 riskLevel: 'HIGH',
@@ -522,22 +553,22 @@ export default function EmergencyMonitor() {
                     accelerometer: null,
                     gyroscope: null,
                     light: 0,
-                    timestamp: Date.now()
-                }
+                    timestamp: Date.now(),
+                },
             }).catch((error) => {
                 console.log('Forced abnormal movement handling error:', error);
             });
         });
 
-        movementUnsubscribe = aiRiskEngine.subscribeMovement((movementEvent) => {
-            if (showHighWarning || showLowWarning || isEmergencyActive) {
-                return;
-            }
+            movementUnsubscribe = aiRiskEngine.subscribeMovement((movementEvent) => {
+                if (showHighWarning || showLowWarning || isEmergencyActive) {
+                    return;
+                }
 
-            startAiAnalysisSequence(movementEvent).catch((error) => {
-                console.log("AI analysis sequence error:", error);
+                startAiAnalysisSequence(movementEvent).catch((error) => {
+                    console.log("AI analysis sequence error:", error);
+                });
             });
-        });
         }
 
         setup();
@@ -567,6 +598,7 @@ export default function EmergencyMonitor() {
             volumeListener.remove();
             safeVoiceDestroy().catch(() => {});
             clearVoiceRestartTimer();
+            clearListeningCountdown();
             clearAiAnalysisProgress();
             if (movementPopupTimeoutRef.current) {
                 clearTimeout(movementPopupTimeoutRef.current);
@@ -701,9 +733,9 @@ export default function EmergencyMonitor() {
                     triggerLowRiskAiAlert(analysis);
                 }
             }
-        } catch (e) {
-            console.log('Error checking pending emergency in setup:', e);
-        }
+            } catch (e) {
+                console.log('Error checking pending emergency in setup:', e);
+            }
 
         }
 
@@ -779,6 +811,12 @@ export default function EmergencyMonitor() {
             }
             }
         } else if (nextAppState === 'background' || nextAppState === 'inactive') {
+            if (listeningRef.current && listeningWindowEndsAtRef.current && Date.now() < listeningWindowEndsAtRef.current) {
+                console.log('🎤 Keeping emergency listening active during transient app-state change.');
+                appStateRef.current = nextAppState;
+                return;
+            }
+
             // App has gone to background
             console.log('🔴 App went to background - using background monitoring service');
             setIsBackgroundMode(true);
@@ -900,9 +938,29 @@ export default function EmergencyMonitor() {
             bindVoiceRuntimeHandlers();
             listeningRef.current = true;
             setIsListening(true);
+            setListeningCountdown(Math.ceil(VOICE_LISTENING_WINDOW_MS / 1000));
+            setListeningStatusText("Listening to the user's audio for emergency keywords.");
+            setHeardSpeechText("");
             voiceRestartAttemptsRef.current = 0;
             listeningWindowEndsAtRef.current = Date.now() + VOICE_LISTENING_WINDOW_MS;
             DeviceEventEmitter.emit("EMERGENCY_LISTENING_START");
+
+            clearListeningCountdown();
+            listeningCountdownIntervalRef.current = setInterval(() => {
+                const endsAt = listeningWindowEndsAtRef.current;
+                if (!endsAt) {
+                    clearListeningCountdown();
+                    return;
+                }
+
+                const secondsRemaining = Math.max(0, Math.ceil((endsAt - Date.now()) / 1000));
+                setListeningCountdown(secondsRemaining);
+
+                if (secondsRemaining <= 0) {
+                    clearListeningCountdown();
+                }
+            }, 250);
+
             const contextualStrings = Array.from(
                 new Set([...keywordsRef.current.low, ...keywordsRef.current.high])
             );
@@ -916,22 +974,35 @@ export default function EmergencyMonitor() {
                 maxAlternatives: 5,
             }, 'emergency');
             if (!voiceStart.ok) {
-                throw new Error(voiceStart.reason);
+                console.log(`Initial speech recognition start failed during emergency window: ${voiceStart.reason}`);
+                scheduleVoiceRestart(`initial emergency start failure: ${voiceStart.reason}`);
+                return;
             }
 
             console.log('✅ Speech recognition started successfully — listening for keywords...');
 
             if (listeningTimeoutRef.current) clearTimeout(listeningTimeoutRef.current);
             listeningTimeoutRef.current = setTimeout(() => {
-                if (listeningRef.current) stopListening();
+                if (listeningRef.current) {
+                    console.log("Emergency listening window ended after 15 seconds with no matched keyword.");
+                    stopListening();
+                }
             }, VOICE_LISTENING_WINDOW_MS);
 
         } catch (e: any) {
             console.error("Voice Error: ", e);
+            if (listeningWindowEndsAtRef.current && Date.now() < listeningWindowEndsAtRef.current) {
+                scheduleVoiceRestart(`activate emergency listening error: ${e?.message || e}`);
+                return;
+            }
+
+            clearListeningCountdown();
             listeningRef.current = false;
             setIsListening(false);
+            setListeningCountdown(0);
+            setListeningStatusText("Listening to the user's audio for emergency keywords.");
+            setHeardSpeechText("");
             DeviceEventEmitter.emit("EMERGENCY_LISTENING_STOP");
-            // Resume audio recording since speech recognition failed
             aiRiskEngine.resumeAudioRecording().catch(() => {});
         }
     };
@@ -941,6 +1012,8 @@ export default function EmergencyMonitor() {
         if (!results || results.length === 0) return;
         const candidates = Array.from(new Set([...results, results.join(" ")]));
         voiceRestartAttemptsRef.current = 0;
+        setHeardSpeechText(results.join(" "));
+        setListeningStatusText("Listening to the user's audio for emergency keywords.");
         console.log("🎙️ Speech detected:", results);
         console.log("🔍 Checking against HIGH keywords:", keywordsRef.current.high);
         console.log("🔍 Checking against LOW keywords:", keywordsRef.current.low);
@@ -950,9 +1023,10 @@ export default function EmergencyMonitor() {
         if (highMatch) {
             console.log("🚨 HIGH RISK KEYWORD MATCHED:", highMatch);
             triggeredKeywordRef.current = highMatch;
+            setListeningStatusText(`High keyword: ${highMatch} is detected.`);
             ActivityService.logActivity(`KEYWORD_DETECTED_HIGH: ${triggeredKeywordRef.current}`, currentEmergencyId);
             handleHighRisk();
-            stopListening();
+            closeListeningAfterKeywordMatch();
             return;
         }
 
@@ -961,9 +1035,10 @@ export default function EmergencyMonitor() {
         if (lowMatch) {
             console.log("⚠️ LOW RISK KEYWORD MATCHED:", lowMatch);
             triggeredKeywordRef.current = lowMatch;
+            setListeningStatusText(`Low keyword: ${lowMatch} is detected.`);
             ActivityService.logActivity(`KEYWORD_DETECTED_LOW: ${triggeredKeywordRef.current}`, currentEmergencyId);
             handleLowRisk();
-            stopListening();
+            closeListeningAfterKeywordMatch();
             return;
         }
     };
@@ -976,10 +1051,15 @@ export default function EmergencyMonitor() {
                 listeningTimeoutRef.current = null;
             }
             clearVoiceRestartTimer();
+            clearListeningCountdown();
+            clearListeningPopupCloseTimer();
             voiceRestartAttemptsRef.current = 0;
             listeningWindowEndsAtRef.current = null;
             listeningRef.current = false;
             setIsListening(false);
+            setListeningCountdown(0);
+            setListeningStatusText("Listening to the user's audio for emergency keywords.");
+            setHeardSpeechText("");
             DeviceEventEmitter.emit("EMERGENCY_LISTENING_STOP");
             await safeVoiceCancel();
 
@@ -994,25 +1074,85 @@ export default function EmergencyMonitor() {
 
     // ─────────────────────────── LOW RISK ───────────────────────────
 
+    const loadEmergencyContext = async () => {
+        let activeUserId = userId;
+        if (!activeUserId) {
+            activeUserId = await AsyncStorage.getItem("userId");
+            if (activeUserId) {
+                setUserId(activeUserId);
+            }
+        }
+
+        const email = await AsyncStorage.getItem("userEmail");
+        const locEnabled = await AsyncStorage.getItem("LOCATION_ENABLED");
+        const locationUrl = locEnabled !== "false" ? await getLocationString() : "Location Disabled";
+
+        return {
+            userId: activeUserId,
+            email,
+            locationUrl,
+            keyword: triggeredKeywordRef.current || "Emergency",
+        };
+    };
+
+    const ensureEmergencyIncident = async (
+        activeUserId: string | null,
+        locationUrl: string,
+        riskLevel: 'LOW' | 'HIGH'
+    ) => {
+        if (!activeUserId) {
+            return null;
+        }
+
+        if (riskLevel === 'HIGH' && currentEmergencyIdRef.current) {
+            return currentEmergencyIdRef.current;
+        }
+
+        const startRes = await EmergencyService.startEmergency(
+            activeUserId,
+            triggeredKeywordRef.current,
+            locationUrl
+        );
+
+        if (!startRes.success) {
+            return null;
+        }
+
+        setCurrentEmergencyId(startRes.emergency_id);
+        currentEmergencyIdRef.current = startRes.emergency_id;
+        await ActivityService.logActivity(
+            riskLevel === 'HIGH' ? "SOS_TRIGGERED_HIGH" : "SOS_TRIGGERED_LOW",
+            startRes.emergency_id
+        );
+        return startRes.emergency_id;
+    };
+
     const handleLowRisk = () => {
-        setShowLowWarning(true);
-        setLowCountdown(5);
-
-        if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
-        if (cancelTimeoutRef.current) clearTimeout(cancelTimeoutRef.current);
-
-        timerIntervalRef.current = setInterval(() => {
-            setLowCountdown(prev => {
-                if (prev <= 1) { clearInterval(timerIntervalRef.current!); return 0; }
-                return prev - 1;
-            });
-        }, 1000);
-
-        cancelTimeoutRef.current = setTimeout(() => {
-            clearInterval(timerIntervalRef.current!);
+        if (listeningRef.current) {
             setShowLowWarning(false);
-            executeLowRiskAction();
-        }, 5000);
+            lowRiskSequenceRef.current = true;
+            executeLowRiskAction()
+                .catch((error) => {
+                    console.error("Error in LOW RISK sequence:", error);
+                })
+                .finally(() => {
+                    lowRiskSequenceRef.current = false;
+                });
+            return;
+        }
+
+        if (lowRiskSequenceRef.current) {
+            return;
+        }
+
+        lowRiskSequenceRef.current = true;
+        executeLowRiskAction()
+            .catch((error) => {
+                console.error("Error in LOW RISK sequence:", error);
+            })
+            .finally(() => {
+                lowRiskSequenceRef.current = false;
+            });
     };
 
     const cancelLowRiskAlert = () => {
@@ -1023,241 +1163,189 @@ export default function EmergencyMonitor() {
 
     const executeLowRiskAction = async () => {
         console.log("Executing LOW RISK action...");
-        try {
-            const email = await AsyncStorage.getItem("userEmail");
-            const locEnabled = await AsyncStorage.getItem("LOCATION_ENABLED");
-            const locStr = locEnabled !== "false" ? await getLocationString() : "Location Disabled";
-            
-            let lat = null, lon = null;
-            if (locStr.includes('?q=')) {
-                const coords = locStr.split('?q=')[1].split(',');
-                lat = coords[0];
-                lon = coords[1];
-            }
+        const context = await loadEmergencyContext();
 
-            if (email && userId) {
-                // start emergency record in DB
-                const startRes = await EmergencyService.startEmergency(userId, triggeredKeywordRef.current, locStr);
-                if (startRes.success) {
-                    setCurrentEmergencyId(startRes.emergency_id);
-                    await EmergencyService.logAlert(startRes.emergency_id, 'email');
-                    await ActivityService.logActivity("SOS_TRIGGERED", startRes.emergency_id);
-                }
-
-                const sosRes = await fetch(`${BASE_URL}/send-sos`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ 
-                        email, 
-                        latitude: lat, 
-                        longitude: lon,
-                        keyword: triggeredKeywordRef.current,
-                        risk_level: 'LOW' 
-                    }),
-                });
-                const sosData = await sosRes.json();
-                console.log("✅ LOW RISK SOS response:", sosData.message);
-            }
-        } catch (error) {
-            console.error("Error in LOW RISK sequence:", error);
+        if (!context.userId) {
+            console.log("Skipping LOW RISK automation because userId is unavailable.");
+            return;
         }
+
+        const emergencyId = await ensureEmergencyIncident(
+            context.userId,
+            context.locationUrl,
+            'LOW'
+        );
+
+        await Promise.all([
+            EmergencyService.sendTrustedContactAlerts({
+                userId: context.userId,
+                locationUrl: context.locationUrl,
+                keyword: context.keyword,
+                riskLevel: 'LOW',
+                emergencyId,
+            }),
+            EmergencyService.sendSosEmailAlert({
+                email: context.email,
+                locationUrl: context.locationUrl,
+                keyword: context.keyword,
+                riskLevel: 'LOW',
+            }),
+        ]);
+
+        if (emergencyId) {
+            await EmergencyService.logAlert(emergencyId, 'email');
+        }
+    };
+
+    const closeListeningAfterKeywordMatch = async () => {
+        if (!listeningRef.current) return;
+
+        if (listeningTimeoutRef.current) {
+            clearTimeout(listeningTimeoutRef.current);
+            listeningTimeoutRef.current = null;
+        }
+
+        clearVoiceRestartTimer();
+        clearListeningCountdown();
+        clearListeningPopupCloseTimer();
+        voiceRestartAttemptsRef.current = 0;
+        listeningWindowEndsAtRef.current = null;
+        listeningRef.current = false;
+
+        try {
+            await safeVoiceCancel();
+        } catch (error) {
+            console.log("Voice cancel after keyword match:", error);
+        }
+
+        listeningPopupCloseTimeoutRef.current = setTimeout(() => {
+            setIsListening(false);
+            setListeningCountdown(0);
+            setListeningStatusText("Listening to the user's audio for emergency keywords.");
+            setHeardSpeechText("");
+            DeviceEventEmitter.emit("EMERGENCY_LISTENING_STOP");
+            listeningPopupCloseTimeoutRef.current = null;
+        }, 2000);
     };
 
     // ─────────────────────────── HIGH RISK ───────────────────────────
 
     const handleHighRisk = () => {
+        if (listeningRef.current) {
+            console.log("🔴 HIGH RISK KEYWORD DETECTED");
+            isCancelledRef.current = false;
+            setIsEmergencyActive(true);
+            if (highRiskSequenceRef.current) {
+                return;
+            }
+
+            highRiskSequenceRef.current = true;
+            executeHighRiskSequence()
+                .catch((err) => {
+                    console.error("High risk alerts/calls error:", err);
+                })
+                .finally(() => {
+                    highRiskSequenceRef.current = false;
+                });
+            return;
+        }
+
+        if (highRiskSequenceRef.current) {
+            return;
+        }
+
         console.log("🔴 HIGH RISK KEYWORD DETECTED");
         isCancelledRef.current = false;
-        setShowHighWarning(true);
-        setHighCountdown(10);
+        highRiskSequenceRef.current = true;
+        setIsEmergencyActive(true);
 
-        if (highTimerIntervalRef.current) clearInterval(highTimerIntervalRef.current);
-        if (highCancelTimeoutRef.current) clearTimeout(highCancelTimeoutRef.current);
-
-        // 10s countdown UI
-        highTimerIntervalRef.current = setInterval(() => {
-            setHighCountdown(prev => {
-                if (prev <= 1) {
-                    clearInterval(highTimerIntervalRef.current!);
-                    return 0;
-                }
-                return prev - 1;
+        executeHighRiskSequence()
+            .catch((err) => {
+                console.error("High risk alerts/calls error:", err);
+            })
+            .finally(() => {
+                highRiskSequenceRef.current = false;
             });
-        }, 1000);
-
-        // After 10 seconds, if NOT cancelled → start recording and alerts
-        highCancelTimeoutRef.current = setTimeout(async () => {
-            clearInterval(highTimerIntervalRef.current!);
-            setShowHighWarning(false);
-
-            if (isCancelledRef.current) {
-                console.log("High risk protocol cancelled within 10s window.");
-                return;
-            }
-
-            console.log("High risk protocol confirmed after 10s. Starting recording and alerts.");
-            startHighRiskRecording();
-            await executeHighRiskAlertsAndCalls();
-        }, 10000);
     };
 
+    const executeHighRiskSequence = async () => {
+        const context = await loadEmergencyContext();
 
-
-    const executeHighRiskAlertsAndCalls = async () => {
-        try {
-            const email = await AsyncStorage.getItem("userEmail");
-            const userId = (await AsyncStorage.getItem("userId")) || "U101";
-            
-            const locEnabled = await AsyncStorage.getItem("LOCATION_ENABLED");
-            const locStr = locEnabled !== "false" ? await getLocationString() : "Location Disabled";
-            
-            console.log('🚨 EXECUTING HIGH RISK ALERTS');
-            console.log('👤 User ID from AsyncStorage:', userId);
-            console.log(' User ID type:', typeof userId);
-            console.log(' Email:', email);
-            console.log('📍 Location:', locStr);
-            
-            // Let's try a simple test first
-            console.log('🔧 Testing API connection...');
-            try {
-                const response = await fetch(`${BASE_URL}/test-connection`);
-                const data = await response.json();
-                console.log('✅ Backend response:', data);
-            } catch (error: any) {
-                console.log('❌ Backend connection failed:', error.message);
-                console.log('❌ Make sure the backend server is running on:', BASE_URL);
-                return;
-            }
-            
-            let lat = null, lon = null;
-            if (locStr.includes('?q=')) {
-                const coords = locStr.split('?q=')[1].split(',');
-                lat = coords[0];
-                lon = coords[1];
-            }
-
-            // 1. Send High-Risk Email immediately
-            if (email) {
-                // start emergency record in DB if not already started
-                if (!currentEmergencyId && userId) {
-                    const startRes = await EmergencyService.startEmergency(userId, triggeredKeywordRef.current, locStr);
-                    if (startRes.success) {
-                        setCurrentEmergencyId(startRes.emergency_id);
-                        await EmergencyService.logAlert(startRes.emergency_id, 'email');
-                        await ActivityService.logActivity("SOS_TRIGGERED", startRes.emergency_id);
-                    }
-                }
-
-                await fetch(`${BASE_URL}/send-sos`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ email, latitude: lat, longitude: lon, keyword: triggeredKeywordRef.current, risk_level: 'HIGH' }),
-                });
-            }
-
-            // 2. Get trusted contacts and start automatic calling rotation
-            console.log('🔍 Fetching trusted contacts for userId:', userId);
-            
-            const contactResponse = await fetch(`${BASE_URL}/getTrustedContacts/${userId}`);
-            
-            console.log('📡 Contact API Response Status:', contactResponse.status);
-            console.log('📡 Contact API Response OK:', contactResponse.ok);
-            
-            if (!contactResponse.ok) {
-                console.log('❌ API call failed with status:', contactResponse.status);
-                console.log('❌ Status text:', contactResponse.statusText);
-                return;
-            }
-            
-            let contacts = await contactResponse.json();
-            console.log('📋 Raw contacts response:', contacts);
-            console.log('📋 Contacts type:', typeof contacts);
-            console.log('📋 Is array?', Array.isArray(contacts));
-            console.log('📋 Contacts length:', contacts?.length);
-
-            // If no contacts found with this userId, try with 'U101' as fallback
-            if (Array.isArray(contacts) && contacts.length === 0) {
-                console.log('⚠️ No contacts found for userId:', userId, 'Trying with U101...');
-                
-                const fallbackResponse = await fetch(`${BASE_URL}/getTrustedContacts/U101`);
-                if (fallbackResponse.ok) {
-                    const fallbackContacts = await fallbackResponse.json();
-                    console.log('📋 Fallback contacts response:', fallbackContacts);
-                    
-                    if (Array.isArray(fallbackContacts) && fallbackContacts.length > 0) {
-                        console.log('✅ Found contacts with U101, using these instead');
-                        // Use the fallback contacts
-                        contacts = fallbackContacts;
-                    }
-                }
-            }
-
-            if (Array.isArray(contacts) && contacts.length > 0) {
-                console.log('📞 Found contacts:', contacts.length, 'Starting call rotation...');
-                console.log('📞 Contact details:', contacts.map(c => ({ name: c.trusted_name, phone: c.trusted_no, userId: c.user_id, hasLocation: !!(c.latitude && c.longitude) })));
-                
-                // 3. Send SMS to all trusted numbers
-                const numbers = contacts.map((c: any) => c.trusted_no);
-                const smsAvailable = await SMS.isAvailableAsync();
-                if (smsAvailable) {
-                    await SMS.sendSMSAsync(numbers, `🚨 SHEILD EMERGENCY! I need help. My location: ${locStr}`);
-                }
-
-                // Update contacts with location data and start calling rotation
-                const updatedContacts = await foregroundCallService.updateContactsWithLocation(userId, contacts);
-                console.log('🔄 Updated contacts for location:', updatedContacts.length);
-
-                // Start call rotation without await to prevent blocking
-                console.log('🚀 Starting emergency call rotation...');
-                foregroundCallService.startEmergencyCallRotation(
-                    updatedContacts,
-                    (contactName: string, timeRemaining: number) => {
-                        console.log(`📞 Calling ${contactName} - ${timeRemaining}s remaining`);
-                        // High risk call logging
-                        if (currentEmergencyId) {
-                            EmergencyService.logCall(currentEmergencyId, 'DIALLED');
-                        }
-                        
-                        // Show Contact Calling modal with countdown
-                        setShowContactCalling(true);
-                        setCallingContactName(contactName);
-                        setCallingCountdown(timeRemaining);
-                    },
-                    () => {
-                        console.log('✅ Call answered!');
-                        setShowContactCalling(false);
-                    },
-                    () => {
-                        console.log('📞 All contacts called');
-                        setShowContactCalling(false);
-                        setCallingContactName('');
-                    }
-                ).catch(err => {
-                    console.error('❌ Call rotation error:', err);
-                    setShowContactCalling(false);
-                });
-                
-                console.log('📞 Call rotation initiated (running in background)');
-            } else {
-                console.log('⚠️ No trusted contacts found or invalid contact data');
-                console.log('⚠️ Response details:', { status: contactResponse.status, statusText: contactResponse.statusText, data: contacts });
-                
-                // Let's also check if there are any contacts at all in the database
-                try {
-                    const allContactsResponse = await fetch(`${BASE_URL}/get-all-contacts-debug`);
-                    if (allContactsResponse.ok) {
-                        const allContacts = await allContactsResponse.json();
-                        console.log('🔍 All contacts in database:', allContacts);
-                    } else {
-                        console.log('🔍 Debug endpoint not available, status:', allContactsResponse.status);
-                    }
-                } catch (debugErr: any) {
-                    console.log('🔍 Debug endpoint error:', debugErr.message);
-                }
-            }
-        } catch (err) {
-            console.error("High risk alerts/calls error:", err);
+        if (!context.userId) {
+            console.log("Skipping HIGH RISK automation because userId is unavailable.");
+            return;
         }
+
+        const emergencyId = await ensureEmergencyIncident(
+            context.userId,
+            context.locationUrl,
+            'HIGH'
+        );
+
+        const contacts = await EmergencyService.getTrustedContacts(context.userId);
+        const contactsWithLocation = await foregroundCallService.updateContactsWithLocation(
+            context.userId,
+            contacts
+                .filter(
+                    (contact) =>
+                        typeof contact.trusted_name === 'string' &&
+                        contact.trusted_name.trim().length > 0 &&
+                        typeof contact.trusted_no === 'string' &&
+                        contact.trusted_no.trim().length > 0
+                )
+                .map((contact) => ({
+                    trusted_id: contact.trusted_id,
+                    trusted_name: contact.trusted_name!.trim(),
+                    trusted_no: contact.trusted_no!.trim(),
+                    trusted_email: contact.email,
+                    email: contact.email,
+                    latitude: contact.latitude,
+                    longitude: contact.longitude,
+                }))
+        );
+
+        await Promise.all([
+            EmergencyService.sendTrustedContactAlerts({
+                userId: context.userId,
+                locationUrl: context.locationUrl,
+                keyword: context.keyword,
+                riskLevel: 'HIGH',
+                emergencyId,
+                contacts: contactsWithLocation,
+            }),
+            EmergencyService.sendSosEmailAlert({
+                email: context.email,
+                locationUrl: context.locationUrl,
+                keyword: context.keyword,
+                riskLevel: 'HIGH',
+            }),
+        ]);
+
+        if (emergencyId) {
+            await EmergencyService.logAlert(emergencyId, 'email');
+        }
+
+        const calledContact = await foregroundCallService.callNearestEmergencyContact(
+            contactsWithLocation,
+            (contactName: string, timeRemaining: number) => {
+                setShowContactCalling(true);
+                setCallingContactName(contactName);
+                setCallingCountdown(timeRemaining);
+            }
+        );
+
+        if (calledContact && emergencyId) {
+            await EmergencyService.logCall(emergencyId, 'DIALLED');
+        }
+
+        setShowContactCalling(false);
+        setCallingContactName('');
+
+        if (isCancelledRef.current) {
+            return;
+        }
+
+        await startHighRiskRecording(emergencyId ?? undefined);
     };
 
     const triggerCall = async (phone: string) => {
@@ -1331,18 +1419,24 @@ export default function EmergencyMonitor() {
         console.log("⏰ Clearing all timers and intervals...");
         if (highCancelTimeoutRef.current) clearTimeout(highCancelTimeoutRef.current);
         if (highTimerIntervalRef.current) clearInterval(highTimerIntervalRef.current);
-        if (listeningTimeoutRef.current) clearTimeout(listeningTimeoutRef.current);
-        if (cancelTimeoutRef.current) clearTimeout(cancelTimeoutRef.current);
-        if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+            if (listeningTimeoutRef.current) clearTimeout(listeningTimeoutRef.current);
+            if (cancelTimeoutRef.current) clearTimeout(cancelTimeoutRef.current);
+            if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+            clearListeningCountdown();
         
         // Reset all emergency states
         console.log("🔄 Resetting emergency states...");
         setHighCountdown(10);
         setLowCountdown(5);
+        setListeningCountdown(0);
         setUploadStatus('');
         blankScreenCounterRef.current = 0;
         luxRef.current = 100;
         triggeredKeywordRef.current = '';
+        highRiskSequenceRef.current = false;
+        lowRiskSequenceRef.current = false;
+        lastVolumePressRef.current = [];
+        volumeHistory.current = [];
         
         // Emit emergency stop event
         DeviceEventEmitter.emit("EMERGENCY_LISTENING_STOP");
@@ -1356,6 +1450,7 @@ export default function EmergencyMonitor() {
             await EmergencyService.endEmergency(currentEmergencyId);
             await ActivityService.logActivity("USER_SAFE_CONFIRMED", currentEmergencyId);
             setCurrentEmergencyId(null);
+            currentEmergencyIdRef.current = null;
         }
         
         console.log("✅ ALL emergency processes terminated successfully");
@@ -1388,6 +1483,7 @@ export default function EmergencyMonitor() {
         setIsRecording(false);
         setIsEmergencyActive(false);
         setAiRiskLevel('NONE');
+        highRiskSequenceRef.current = false;
         await cancelAiDetection();
 
         if (!KEYWORD_TRIGGER_ONLY_MODE) {
@@ -1444,42 +1540,33 @@ export default function EmergencyMonitor() {
 
         const now = Date.now();
         lastVolumePressRef.current.push(now);
-        lastVolumePressRef.current = lastVolumePressRef.current.filter((t) => now - t < 3000);
+        lastVolumePressRef.current = lastVolumePressRef.current.filter((t) => now - t < 1200);
 
         const direction: 'up' | 'down' = delta > 0 ? 'up' : 'down';
         volumeHistory.current.push({ time: now, direction });
-        volumeHistory.current = volumeHistory.current.filter((entry) => now - entry.time < 3000);
+        volumeHistory.current = volumeHistory.current.filter((entry) => now - entry.time < 1200);
 
-        const latestFour = volumeHistory.current
-            .slice(-4)
+        const latestTwo = volumeHistory.current
+            .slice(-2)
             .map((entry) => entry.direction)
             .join('-');
 
-        console.log('Volume button pattern:', latestFour || direction);
+        console.log('Volume button pattern:', latestTwo || direction);
 
-        if (latestFour === 'up-up-down-down' && !listeningRef.current) {
+        if (
+            lastVolumePressRef.current.length >= 2 &&
+            (latestTwo === 'up-up' || latestTwo === 'down-down' || latestTwo === 'up-down' || latestTwo === 'down-up') &&
+            !listeningRef.current
+        ) {
             lastVolumePressRef.current = [];
             volumeHistory.current = [];
-            console.log('VOLUME BUTTON TRIGGER - EMERGENCY ACTIVATED');
+            console.log('VOLUME BUTTON TRIGGER - KEYWORD WORKFLOW ACTIVATED');
             activateEmergencyListening().catch((error) => {
                 console.log('Volume trigger activation error:', error);
             });
         }
 
         recenterVolumeForHardwareTrigger().catch(() => {});
-        return;
-        
-        // Keep only last 3 seconds of presses
-        lastVolumePressRef.current = lastVolumePressRef.current.filter(t => now - t < 3000);
-        
-        console.log('🔊 Volume button pressed:', lastVolumePressRef.current.length, 'times in 3s');
-        
-        // Triple volume press triggers emergency
-        if (lastVolumePressRef.current.length >= 3 && !listeningRef.current) {
-            lastVolumePressRef.current = [];
-            console.log('🔥🔥🔥 VOLUME BUTTON TRIGGER - EMERGENCY ACTIVATED');
-            activateEmergencyListening();
-        }
     }, [recenterVolumeForHardwareTrigger]);
     
     const performRiskAnalysis = async (): Promise<RiskAnalysis> => {
@@ -1653,36 +1740,19 @@ export default function EmergencyMonitor() {
 
     const startEmergencyWorkflow = async () => {
         console.log('🚨 Starting Emergency Workflow...');
-        
-        let emergencyId = currentEmergencyId;
-        if (!emergencyId) {
-            const storedUserId = await AsyncStorage.getItem("userId");
-            if (storedUserId) {
-                const locStr = await getLocationString();
-                const startRes = await EmergencyService.startEmergency(storedUserId, triggeredKeywordRef.current, locStr);
-                if (startRes.success) {
-                    emergencyId = startRes.emergency_id;
-                    setCurrentEmergencyId(startRes.emergency_id);
-                    await EmergencyService.logAlert(startRes.emergency_id, 'email');
-                }
-            }
-        }
-
-        if (emergencyId) {
-            await ActivityService.logActivity("SOS_TRIGGERED_AI", emergencyId);
-        }
-
-        // Start high risk recording
-        await startHighRiskRecording();
-        
-        // Execute high risk alerts and calls (this now skips startRes if currentEmergencyId is already set)
-        await executeHighRiskAlertsAndCalls();
+        await executeHighRiskSequence();
     };
-    const startHighRiskRecording = async () => {
+
+    const startHighRiskRecording = async (emergencyIdOverride?: number) => {
         console.log("📹 Starting high risk video + audio recording...");
 
         if (listeningRef.current) {
             await stopListening({ resumeAiAudio: false });
+        }
+
+        if (emergencyIdOverride && currentEmergencyIdRef.current !== emergencyIdOverride) {
+            currentEmergencyIdRef.current = emergencyIdOverride;
+            setCurrentEmergencyId(emergencyIdOverride);
         }
 
         // Request all permissions
@@ -1712,33 +1782,6 @@ export default function EmergencyMonitor() {
         setShowCamera(true);
         setIsRecording(true);
         setUploadStatus('Recording...');
-
-        // Start emergency calls after 5 seconds of recording
-        console.log('⏰ Emergency calls will start in 5 seconds...');
-        setShowCallCountdown(true);
-        setCallCountdown(5);
-        
-        callCountdownRef.current = setInterval(() => {
-            setCallCountdown(prev => {
-                if (prev <= 1) {
-                    if (callCountdownRef.current) {
-                        clearInterval(callCountdownRef.current);
-                        callCountdownRef.current = null;
-                    }
-                    setShowCallCountdown(false);
-                    
-                    // Start calls
-                    if (!isCancelledRef.current) {
-                        console.log('🚀 Starting emergency calls (5 seconds delay complete)...');
-                        executeHighRiskAlertsAndCalls().catch(err => {
-                            console.error('Emergency calls failed to start:', err);
-                        });
-                    }
-                    return 0;
-                }
-                return prev - 1;
-            });
-        }, 1000);
     };
 
     // Called from CameraView once it's mounted and ready
@@ -1760,19 +1803,11 @@ export default function EmergencyMonitor() {
                     return;
                 }
 
-                console.log(`💡 Checking for black screen...`);
-                
-                // Simulate black screen detection based on camera feed analysis
-                // In a real implementation, you would analyze the actual camera frames
-                // For now, we'll simulate periodic black screen detection
-                const now = Date.now();
-                const detectionCycle = now % 6000; // 6-second cycle
-                
-                // Simulate black screen for 2 seconds every 6 seconds
-                if (detectionCycle < 2000) {
-                    // This simulates when the camera feed is completely black
+                console.log(`💡 Checking for black screen... current lux=${luxRef.current}`);
+
+                if (luxRef.current <= 5) {
                     blankScreenCounterRef.current += 1;
-                    console.log(`🌑 Black screen detected from camera feed (${blankScreenCounterRef.current}/2)`);
+                    console.log(`🌑 Dark or obstructed camera feed detected (${blankScreenCounterRef.current}/2)`);
                 } else {
                     if (blankScreenCounterRef.current > 0) {
                         console.log('☀️ Camera feed restored, resetting counter');
@@ -1827,13 +1862,11 @@ export default function EmergencyMonitor() {
                                                 return;
                                             }
 
-                                            console.log(`💡 [SWITCHED] Checking for black screen...`);
-                                            
-                                            // Continue black screen detection for switched camera
-                                            const switchCycle = Date.now() % 6000;
-                                            if (switchCycle < 2000) {
+                                            console.log(`💡 [SWITCHED] Checking for black screen... current lux=${luxRef.current}`);
+
+                                            if (luxRef.current <= 5) {
                                                 blankScreenCounterRef.current += 1;
-                                                console.log(`🌑 [SWITCHED] Black screen detected (${blankScreenCounterRef.current}/2)`);
+                                                console.log(`🌑 [SWITCHED] Dark or obstructed feed detected (${blankScreenCounterRef.current}/2)`);
                                             } else {
                                                 if (blankScreenCounterRef.current > 0) {
                                                     console.log('☀️ [SWITCHED] Camera feed restored, resetting counter');
@@ -1963,8 +1996,10 @@ export default function EmergencyMonitor() {
     const uploadToCloudinary = async (localUri: string, type: 'video' | 'audio') => {
         try {
             const email = await AsyncStorage.getItem("userEmail");
-            const userId = (await AsyncStorage.getItem("userId")) || "U101";
-            if (!email) return;
+            const userId = await AsyncStorage.getItem("userId");
+            if (!email || !userId) {
+                return;
+            }
 
             // 1. Get signature from backend
             const sigRes = await fetch(`${BASE_URL}/generate-signature`);
@@ -2000,10 +2035,8 @@ export default function EmergencyMonitor() {
                 console.log("✅ Direct Upload Succeeded:", cloudData.secure_url);
                 setUploadStatus('✅ Upload complete!');
 
-                // 4. Trigger Twilio Protocol + DB Log
+                // 4. Persist evidence for cloud storage and contact access flows
                 const locationStr = await getLocationString();
-                const contactResponse = await fetch(`${BASE_URL}/getTrustedContacts/${userId}`);
-                const contacts = await contactResponse.json();
 
                 let deviceId = "Unknown";
                 try {
@@ -2028,13 +2061,15 @@ export default function EmergencyMonitor() {
                 });
 
                 // Link evidence to the emergency incident
-                if (currentEmergencyId) {
+                const emergencyId = currentEmergencyIdRef.current;
+                if (emergencyId) {
                     if (type === 'video') {
-                        await EmergencyService.logVideo(currentEmergencyId, cameraFacing === 'front' ? 'front' : 'rear', cloudData.secure_url);
+                        await EmergencyService.logVideo(emergencyId, cameraFacing === 'front' ? 'front' : 'rear', cloudData.secure_url);
                     } else {
-                        await EmergencyService.logAudio(currentEmergencyId, cloudData.secure_url);
+                        await EmergencyService.logAudio(emergencyId, cloudData.secure_url);
                     }
-                    await ActivityService.logActivity(`RECORDING_UPLOADED_${type.toUpperCase()}`, currentEmergencyId);
+                    await EmergencyService.storeEvidence(emergencyId, type);
+                    await ActivityService.logActivity(`RECORDING_UPLOADED_${type.toUpperCase()}`, emergencyId);
                 }
 
             } else {
@@ -2110,8 +2145,27 @@ export default function EmergencyMonitor() {
                 </View>
             )}
 
+            <Modal visible={isListening} transparent animationType="fade">
+                <View style={styles.modalOverlay}>
+                    <View style={[styles.modalContent, styles.listeningContent]}>
+                        <View style={styles.listeningIconWrap}>
+                            <MaterialIcons name="mic" size={40} color="#22c55e" />
+                        </View>
+                        <Text style={[styles.modalTitle, styles.listeningTitle]}>VOICE DETECTION ACTIVE</Text>
+                        <Text style={styles.modalText}>{listeningStatusText}</Text>
+                        <Text style={styles.listeningCountdown}>{listeningCountdown}s</Text>
+                        <Text style={styles.listeningSubtext}>
+                            Hearing: {heardSpeechText || "Waiting for speech..."}
+                        </Text>
+                        <Text style={styles.listeningSubtext}>
+                            Speak a saved high-risk or low-risk keyword within 15 seconds.
+                        </Text>
+                    </View>
+                </View>
+            </Modal>
+
             {/* ───── LOW RISK WARNING MODAL ───── */}
-            <Modal visible={showLowWarning} transparent animationType="fade">
+            <Modal visible={showLowWarning && !isListening} transparent animationType="fade">
                 <View style={styles.modalOverlay}>
                     <View style={styles.modalContent}>
                         <View style={styles.warningIconWrap}>
@@ -2131,7 +2185,7 @@ export default function EmergencyMonitor() {
             </Modal>
 
             {/* ───── HIGH RISK WARNING MODAL ───── */}
-            <Modal visible={showHighWarning} transparent animationType="slide">
+            <Modal visible={showHighWarning && !isListening} transparent animationType="slide">
                 <View style={styles.modalOverlay}>
                     <LinearGradient
                         colors={['#2a0f0f', '#1a0505']}
@@ -2481,6 +2535,10 @@ const styles = StyleSheet.create({
         borderColor: "rgba(236,19,19,0.4)",
         backgroundColor: "#1a0f0f",
     },
+    listeningContent: {
+        borderColor: "rgba(34,197,94,0.45)",
+        backgroundColor: "#08140d",
+    },
     warningIconWrap: {
         backgroundColor: "rgba(245,158,11,0.15)",
         padding: 16,
@@ -2493,6 +2551,12 @@ const styles = StyleSheet.create({
         borderRadius: 50,
         marginBottom: 14,
     },
+    listeningIconWrap: {
+        backgroundColor: "rgba(34,197,94,0.18)",
+        padding: 16,
+        borderRadius: 50,
+        marginBottom: 14,
+    },
     modalTitle: {
         color: "#f59e0b",
         fontSize: 20,
@@ -2500,12 +2564,28 @@ const styles = StyleSheet.create({
         marginBottom: 10,
         letterSpacing: 1,
     },
+    listeningTitle: {
+        color: "#22c55e",
+        fontSize: 22,
+    },
     modalText: {
         color: "#fff",
         fontSize: 15,
         marginBottom: 10,
         textAlign: "center",
         lineHeight: 24,
+    },
+    listeningCountdown: {
+        fontSize: 40,
+        fontWeight: "bold",
+        color: "#22c55e",
+        marginBottom: 8,
+    },
+    listeningSubtext: {
+        color: "#9ca3af",
+        fontSize: 13,
+        textAlign: "center",
+        lineHeight: 20,
     },
     countdown: {
         fontSize: 36,

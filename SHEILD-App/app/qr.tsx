@@ -19,7 +19,7 @@ import * as Clipboard from 'expo-clipboard';
 
 const { width } = Dimensions.get("window");
 const buildFallbackQrUrl = (userId: string, userEmail: string) =>
-    `${BASE_URL}/qr-emergency?userId=${encodeURIComponent(userId)}&email=${encodeURIComponent(userEmail)}`;
+    `${BASE_URL}/qr-emergency?userId=${encodeURIComponent(userId)}`;
 
 export default function QRPage() {
     const router = useRouter();
@@ -211,7 +211,7 @@ export default function QRPage() {
                             </View>
                         )}
                     </View>
-                    <Text style={styles.scanHint}>Scan to send emergency alert</Text>
+                    <Text style={styles.scanHint}>Scan to open the one-tap SOS page</Text>
                     {resolvedQrUrl && (
                         <Text style={styles.qrUrlText} numberOfLines={2}>
                             {resolvedQrUrl}
@@ -246,7 +246,7 @@ export default function QRPage() {
                     <View style={{ flex: 1, marginLeft: 12 }}>
                         <Text style={styles.warningTitle}>Safety Warning</Text>
                         <Text style={styles.warningText}>
-                            QR code does not auto-trigger SOS. The scanner must confirm the action on our web page before alerts are sent.
+                            When this QR is scanned, the web page shows one SOS button. Pressing it sends the user's SOS and live location to emergency contacts automatically from the backend.
                         </Text>
                     </View>
                 </View>
@@ -256,7 +256,7 @@ export default function QRPage() {
                     <View style={{ flex: 1, marginLeft: 12 }}>
                         <Text style={[styles.warningTitle, {color: "#aaa"}]}>How it works</Text>
                         <Text style={[styles.warningText, {color: "#777"}]}>
-                            Carry this code (on your lock screen or printed) so bystanders can notify your family even if your phone is locked or out of reach.
+                            Keep this QR accessible so a bystander can open the SOS page and trigger alerts for your emergency contacts if your phone is locked or unreachable.
                         </Text>
                     </View>
                 </View>

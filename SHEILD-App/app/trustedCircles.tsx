@@ -106,7 +106,7 @@ export default function TrustedCircles() {
         }
 
         if (!selectedLocation) {
-            Alert.alert("Location Missing", "Please enter and 'ANALYZE' the contact's location first.");
+            Alert.alert("Location Missing", "Please enter and 'ANALYZE' the contact&apos;s location first.");
             return;
         }
 
@@ -266,7 +266,7 @@ export default function TrustedCircles() {
                     <View style={styles.locationContainer}>
                         <View style={styles.locationHeader}>
                             <MaterialIcons name="location-searching" size={18} color="#ec5b13" />
-                            <Text style={styles.locationLabel}>Analyze Contact's Location</Text>
+                            <Text style={styles.locationLabel}>Analyze Contact&apos;s Location</Text>
                         </View>
                         
                         <View style={styles.searchRow}>
@@ -302,7 +302,7 @@ export default function TrustedCircles() {
                         )}
                         
                         <Text style={styles.hintText}>
-                            Enter where this contact lives. We'll use this to find the nearest person when you need help.
+                            Enter where this contact lives. We&apos;ll use this to find the nearest person when you need help.
                         </Text>
                     </View>
 
