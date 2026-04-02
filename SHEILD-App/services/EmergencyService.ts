@@ -239,7 +239,17 @@ export const EmergencyService = {
                 }),
             });
 
-            return await response.json();
+            const rawResponse = await response.text();
+
+            try {
+                return JSON.parse(rawResponse);
+            } catch {
+                console.error("Non-JSON SOS response:", rawResponse);
+                return {
+                    success: false,
+                    message: "Unexpected response from SOS endpoint",
+                };
+            }
         } catch (e) {
             console.error("Error sending SOS email alert:", e);
             return { success: false, message: "Failed to send SOS email alert" };

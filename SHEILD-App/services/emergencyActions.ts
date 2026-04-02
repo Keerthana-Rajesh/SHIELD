@@ -66,7 +66,14 @@ export const triggerLowRisk = async (detectedKeyword?: string) => {
                     risk_level: "LOW",
                 }),
             });
-            const sosData = await sosRes.json();
+            const sosRaw = await sosRes.text();
+            let sosData;
+            try {
+                sosData = JSON.parse(sosRaw);
+            } catch {
+                console.error("Non-JSON LOW RISK SOS response:", sosRaw);
+                sosData = { success: false, message: "Unexpected SOS response" };
+            }
             console.log("✅ LOW RISK SOS sent:", sosData.message);
         }
 
@@ -127,7 +134,14 @@ export const triggerHighRisk = async (detectedKeyword?: string) => {
                     risk_level: "HIGH",
                 }),
             });
-            const sosData = await sosRes.json();
+            const sosRaw = await sosRes.text();
+            let sosData;
+            try {
+                sosData = JSON.parse(sosRaw);
+            } catch {
+                console.error("Non-JSON HIGH RISK SOS response:", sosRaw);
+                sosData = { success: false, message: "Unexpected SOS response" };
+            }
             console.log("✅ HIGH RISK SOS sent:", sosData.message);
         }
 
