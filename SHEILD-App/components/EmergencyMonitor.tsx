@@ -1445,6 +1445,55 @@ export default function EmergencyMonitor() {
         }, 2000);
     };
 
+    const startHighRiskCountdown = (onConfirm: () => Promise<void> | void) => {
+        if (highCancelTimeoutRef.current) {
+            clearTimeout(highCancelTimeoutRef.current);
+            highCancelTimeoutRef.current = null;
+        }
+
+        if (highTimerIntervalRef.current) {
+            clearInterval(highTimerIntervalRef.current);
+            highTimerIntervalRef.current = null;
+        }
+
+        let countdown = 10;
+        setHighCountdown(countdown);
+
+        highTimerIntervalRef.current = setInterval(() => {
+            countdown -= 1;
+            setHighCountdown(Math.max(countdown, 0));
+
+            if (countdown <= 0 && highTimerIntervalRef.current) {
+                clearInterval(highTimerIntervalRef.current);
+                highTimerIntervalRef.current = null;
+            }
+        }, 1000);
+
+        highCancelTimeoutRef.current = setTimeout(() => {
+            if (highTimerIntervalRef.current) {
+                clearInterval(highTimerIntervalRef.current);
+                highTimerIntervalRef.current = null;
+            }
+
+            highCancelTimeoutRef.current = null;
+            setShowAiRiskAlert(false);
+            setShowHighWarning(false);
+
+            if (isCancelledRef.current || highRiskSequenceRef.current) {
+                return;
+            }
+
+            highRiskSequenceRef.current = true;
+            Promise.resolve(onConfirm())
+                .catch((err) => {
+                    console.error("High risk alerts/calls error:", err);
+                })
+                .finally(() => {
+                    highRiskSequenceRef.current = false;
+                });
+        }, 10000);
+    };
+
     // ─────────────────────────── HIGH RISK ───────────────────────────
 
     const handleHighRisk = () => {
@@ -1457,6 +1506,8 @@ export default function EmergencyMonitor() {
         setIsEmergencyActive(true);
         setShowAiRiskAlert(false);
         setShowHighWarning(true);
+        startHighRiskCountdown(() => executeHighRiskSequence());
+        return;
         setHighCountdown(10);
 
         if (highCancelTimeoutRef.current) clearTimeout(highCancelTimeoutRef.current);
@@ -1858,6 +1909,12 @@ export default function EmergencyMonitor() {
         setAiRiskLevel('HIGH');
         setAiConfidence(analysis.confidence);
         setAiRiskTriggers(analysis.triggers);
+        startHighRiskCountdown(() => {
+            console.log('ðŸš¨ AI HIGH RISK CONFIRMED - Starting emergency workflow!');
+            triggeredKeywordRef.current = `AI Detection: ${analysis.triggers.join(', ')}`;
+            return startEmergencyWorkflow();
+        });
+        return;
         
         // Start countdown
         let countdown = 10;
