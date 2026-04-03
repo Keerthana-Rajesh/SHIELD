@@ -187,6 +187,7 @@ export default function EmergencyMonitor() {
     const [isGuardianEnabled, setIsGuardianEnabled] = useState(false);
     const [guardianStatus, setGuardianStatus] = useState<'PASSIVE' | 'ACTIVE' | 'EMERGENCY'>('PASSIVE');
     const cameraRef = useRef<CameraView | null>(null);
+    const cameraFacingRef = useRef<CameraType>('back');
     const videoRecordingRef = useRef<boolean>(false);
     const audioRecordingRef = useRef<Audio.Recording | null>(null);
     const [cameraPermission, requestCameraPermission] = useCameraPermissions();
@@ -636,6 +637,10 @@ export default function EmergencyMonitor() {
             analysisProgressIntervalRef.current = null;
         }
     }, []);
+
+    useEffect(() => {
+        cameraFacingRef.current = cameraFacing;
+    }, [cameraFacing]);
 
     const clearAnalysisCompletionTimeout = useCallback(() => {
         if (analysisCompletionTimeoutRef.current) {
@@ -1443,41 +1448,46 @@ export default function EmergencyMonitor() {
     // ─────────────────────────── HIGH RISK ───────────────────────────
 
     const handleHighRisk = () => {
-        if (listeningRef.current) {
-            console.log("🔴 HIGH RISK KEYWORD DETECTED");
-            isCancelledRef.current = false;
-            setIsEmergencyActive(true);
-            if (highRiskSequenceRef.current) {
-                return;
-            }
-
-            highRiskSequenceRef.current = true;
-            executeHighRiskSequence()
-                .catch((err) => {
-                    console.error("High risk alerts/calls error:", err);
-                })
-                .finally(() => {
-                    highRiskSequenceRef.current = false;
-                });
-            return;
-        }
-
         if (highRiskSequenceRef.current) {
             return;
         }
 
         console.log("🔴 HIGH RISK KEYWORD DETECTED");
         isCancelledRef.current = false;
-        highRiskSequenceRef.current = true;
         setIsEmergencyActive(true);
+        setShowAiRiskAlert(false);
+        setShowHighWarning(true);
+        setHighCountdown(10);
 
-        executeHighRiskSequence()
-            .catch((err) => {
-                console.error("High risk alerts/calls error:", err);
-            })
-            .finally(() => {
-                highRiskSequenceRef.current = false;
-            });
+        if (highCancelTimeoutRef.current) clearTimeout(highCancelTimeoutRef.current);
+        if (highTimerIntervalRef.current) clearInterval(highTimerIntervalRef.current);
+
+        let countdown = 10;
+        highTimerIntervalRef.current = setInterval(() => {
+            countdown--;
+            setHighCountdown(countdown);
+
+            if (countdown <= 0) {
+                if (highTimerIntervalRef.current) clearInterval(highTimerIntervalRef.current);
+                setShowHighWarning(false);
+
+                if (!isCancelledRef.current && !highRiskSequenceRef.current) {
+                    highRiskSequenceRef.current = true;
+                    executeHighRiskSequence()
+                        .catch((err) => {
+                            console.error("High risk alerts/calls error:", err);
+                        })
+                        .finally(() => {
+                            highRiskSequenceRef.current = false;
+                        });
+                }
+            }
+        }, 1000);
+
+        highCancelTimeoutRef.current = setTimeout(() => {
+            if (highTimerIntervalRef.current) clearInterval(highTimerIntervalRef.current);
+            setShowHighWarning(false);
+        }, 10000);
     };
 
     const executeHighRiskSequence = async () => {
@@ -1528,6 +1538,12 @@ export default function EmergencyMonitor() {
             await EmergencyService.logAlert(emergencyId, 'email');
         }
 
+        await startHighRiskRecording(emergencyId ?? undefined);
+
+        if (isCancelledRef.current) {
+            return;
+        }
+
         const calledContact = await foregroundCallService.callNearestEmergencyContact(
             contactsWithLocation,
             (contactName: string, timeRemaining: number) => {
@@ -1543,12 +1559,6 @@ export default function EmergencyMonitor() {
 
         setShowContactCalling(false);
         setCallingContactName('');
-
-        if (isCancelledRef.current) {
-            return;
-        }
-
-        await startHighRiskRecording(emergencyId ?? undefined);
     };
 
     const triggerCall = async (phone: string) => {
@@ -1568,6 +1578,12 @@ export default function EmergencyMonitor() {
 
     const handleIAmSafe = async () => {
         console.log("🛡️ User marked as SAFE - stopping ALL emergency processes");
+        const safeUserId = userId || await AsyncStorage.getItem("userId");
+        const safeEmail = await AsyncStorage.getItem("userEmail");
+        const safeUserName =
+            (await AsyncStorage.getItem("userName")) ||
+            (await AsyncStorage.getItem("userFullName")) ||
+            safeEmail;
         
         // Set cancellation flag immediately
         isCancelledRef.current = true;
@@ -1655,6 +1671,12 @@ export default function EmergencyMonitor() {
             setCurrentEmergencyId(null);
             currentEmergencyIdRef.current = null;
         }
+
+        await EmergencyService.sendSafeEmailAlert({
+            userId: safeUserId,
+            email: safeEmail,
+            userName: safeUserName,
+        });
         
         console.log("✅ ALL emergency processes terminated successfully");
         
@@ -2008,6 +2030,11 @@ export default function EmergencyMonitor() {
 
                 console.log(`💡 Checking for black screen... current lux=${luxRef.current}`);
 
+                if (cameraFacingRef.current !== 'back') {
+                    blankScreenCounterRef.current = 0;
+                    return;
+                }
+
                 if (luxRef.current <= 5) {
                     blankScreenCounterRef.current += 1;
                     console.log(`🌑 Dark or obstructed camera feed detected (${blankScreenCounterRef.current}/2)`);
@@ -2020,13 +2047,13 @@ export default function EmergencyMonitor() {
 
                 // Require 2 consecutive checks before switching (2 seconds total)
                 if (blankScreenCounterRef.current >= 2) {
-                    console.log("🌑 True black screen detected from camera feed. Switching camera.");
+                    console.log("🌑 True black screen detected from back camera feed. Switching to FRONT camera.");
                     blankScreenCounterRef.current = 0;
                     
                     // Stop current recording and switch camera
                     if (cameraRef.current && videoRecordingRef.current) {
-                        const newFacing = cameraFacing === 'back' ? 'front' : 'back';
-                        console.log(`📹 Switching from ${cameraFacing} to ${newFacing}`);
+                        const newFacing: CameraType = 'front';
+                        console.log(`📹 Switching from ${cameraFacingRef.current} to ${newFacing}`);
                         
                         // Stop recording
                         try {
@@ -2042,6 +2069,7 @@ export default function EmergencyMonitor() {
                         clearInterval(checkBlankInterval);
                         
                         // Update camera facing
+                        cameraFacingRef.current = newFacing;
                         setCameraFacing(newFacing);
                         console.log(`📹 Camera facing updated to ${newFacing}`);
                         
@@ -2067,45 +2095,9 @@ export default function EmergencyMonitor() {
 
                                             console.log(`💡 [SWITCHED] Checking for black screen... current lux=${luxRef.current}`);
 
-                                            if (luxRef.current <= 5) {
-                                                blankScreenCounterRef.current += 1;
-                                                console.log(`🌑 [SWITCHED] Dark or obstructed feed detected (${blankScreenCounterRef.current}/2)`);
-                                            } else {
-                                                if (blankScreenCounterRef.current > 0) {
-                                                    console.log('☀️ [SWITCHED] Camera feed restored, resetting counter');
-                                                }
-                                                blankScreenCounterRef.current = 0;
-                                            }
-
-                                            if (blankScreenCounterRef.current >= 2) {
-                                                console.log("🌑 [SWITCHED] True black screen detected. Switching camera again.");
-                                                blankScreenCounterRef.current = 0;
-                                                // Recursive switch back to original camera
-                                                const originalFacing = newFacing === 'back' ? 'front' : 'back';
-                                                
-                                                if (cameraRef.current && videoRecordingRef.current) {
-                                                    console.log(`📹 [SWITCHED] Switching from ${newFacing} to ${originalFacing}`);
-                                                    cameraRef.current.stopRecording();
-                                                    videoRecordingRef.current = false;
-                                                    setCameraFacing(originalFacing);
-                                                    
-                                                    setTimeout(() => {
-                                                        if (!isCancelledRef.current && showCamera && cameraRef.current) {
-                                                            console.log(`📹 [SWITCHED] Restarting recording with ${originalFacing} camera`);
-                                                            videoRecordingRef.current = true;
-                                                            cameraRef.current.recordAsync().then(result => {
-                                                                if (result && result.uri && !isCancelledRef.current) {
-                                                                    console.log("✅ [SWITCHED] Switched back video saved at:", result.uri);
-                                                                    uploadToCloudinary(result.uri, 'video');
-                                                                }
-                                                            }).catch(err => {
-                                                                console.error('Error recording with switched back camera:', err);
-                                                            });
-                                                        }
-                                                    }, 1000);
-                                                }
-                                                clearInterval(newCheckInterval);
-                                            }
+                                            // Once the app has switched to the front camera, keep recording there.
+                                            // Do not toggle back automatically on later dark readings.
+                                            blankScreenCounterRef.current = 0;
                                         }, 1000); // Check every 1 second for faster response
                                     }
                                 }).catch(err => {

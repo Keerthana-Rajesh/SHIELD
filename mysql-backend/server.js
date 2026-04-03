@@ -63,6 +63,7 @@ app.get("/generate-signature", (req, res) => {
 });
 
 const nodemailer = require("nodemailer");
+const { sendSafeEmail } = require("./services/alertService");
 const transporter = nodemailer.createTransport({
   host: "smtp.gmail.com",
   port: 587,
@@ -200,6 +201,88 @@ Please check on the user immediately.`,
     res.status(500).json({
       success: false,
       message: "Failed to send SOS emails",
+      error: error.message,
+      code: error.code || null,
+      command: error.command || null,
+      response: error.response || null,
+    });
+  }
+});
+
+app.post("/send-safe", async (req, res) => {
+  try {
+    const { email, user_id, user_name } = req.body;
+    const normalizedEmail =
+      typeof email === "string" && email.trim() ? email.trim().toLowerCase() : null;
+    const normalizedUserId =
+      user_id === undefined || user_id === null || `${user_id}`.trim() === ""
+        ? null
+        : String(user_id).trim();
+
+    if (!normalizedEmail && !normalizedUserId) {
+      return res.status(400).json({
+        success: false,
+        message: "email or user_id is required",
+      });
+    }
+
+    const db = require("./config/db");
+    let users = [];
+    if (normalizedUserId) {
+      [users] = await db.query("SELECT id, email, name FROM users WHERE id = ?", [normalizedUserId]);
+    } else if (normalizedEmail) {
+      [users] = await db.query("SELECT id, email, name FROM users WHERE email = ?", [normalizedEmail]);
+    }
+
+    if (users.length === 0) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    const user = users[0];
+    const [trustedContacts] = await db.query(
+      "SELECT email FROM trusted_contact WHERE user_id = ?",
+      [user.id]
+    );
+    const [legacyContacts] = await db.query(
+      "SELECT contact_email FROM contacts WHERE user_id = ?",
+      [user.id]
+    );
+
+    const uniqueRecipients = [
+      ...trustedContacts.map((c) => c.email),
+      ...legacyContacts.map((c) => c.contact_email),
+    ]
+      .filter((value) => typeof value === "string" && value.trim().length > 0)
+      .map((value) => value.trim().toLowerCase())
+      .filter((value, index, array) => array.indexOf(value) === index);
+
+    if (uniqueRecipients.length === 0) {
+      return res.json({ success: true, message: "No trusted emails to notify" });
+    }
+
+    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+      return res.status(500).json({
+        success: false,
+        message: "Email credentials are missing on the backend",
+      });
+    }
+
+    const safeUserName =
+      typeof user_name === "string" && user_name.trim().length > 0
+        ? user_name.trim()
+        : user.name || user.email;
+
+    await sendSafeEmail(uniqueRecipients.join(","), safeUserName);
+    res.json({
+      success: true,
+      message: "Safe emails sent successfully",
+      recipients: uniqueRecipients.length,
+    });
+  } catch (error) {
+    console.error("Safe Email error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to send safe emails",
       error: error.message,
       code: error.code || null,
       command: error.command || null,

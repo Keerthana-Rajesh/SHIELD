@@ -262,6 +262,47 @@ export const EmergencyService = {
         }
     },
 
+    async sendSafeEmailAlert(params: {
+        userId?: string | null;
+        email?: string | null;
+        userName?: string | null;
+    }) {
+        if (!params.email && !params.userId) {
+            return { success: false, message: "Missing user email and userId" };
+        }
+
+        try {
+            const response = await fetch(`${BASE_URL}/send-safe`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    user_id: params.userId ?? null,
+                    email: params.email ?? null,
+                    user_name: params.userName ?? null,
+                }),
+            });
+
+            const rawResponse = await response.text();
+
+            try {
+                const parsed = JSON.parse(rawResponse);
+                if (!response.ok || parsed?.success === false) {
+                    console.error("Safe email alert failed:", parsed);
+                }
+                return parsed;
+            } catch {
+                console.error("Non-JSON safe email response:", rawResponse);
+                return {
+                    success: false,
+                    message: "Unexpected response from safe email endpoint",
+                };
+            }
+        } catch (e) {
+            console.error("Error sending safe email alert:", e);
+            return { success: false, message: "Failed to send safe email alert" };
+        }
+    },
+
     // 8. Call Logging
     async logCall(emergencyId: number, status: 'DIALLED' | 'ANSWERED' | 'FAILED') {
         try {
